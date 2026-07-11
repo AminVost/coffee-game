@@ -1,0 +1,3 @@
+import { Trophy } from "lucide-react";
+import { Card } from "@/components/ui/card";
+export default function Champions(){return <div className="page-shell"><p className="section-kicker">HALL OF FAME</p><h1 className="section-title mt-2">قهرمانان Coffee Game</h1><div className="mt-8 grid gap-5 md:grid-cols-3">{["امیرحسین رضایی","فرهاد کاظمی","تیم شاهین"].map((n,i)=><Card key={n} className="p-7 text-center"><Trophy className="mx-auto text-amber-500" size={42}/><h2 className="mt-5 text-xl font-black">{n}</h2><p className="mt-2 text-sm text-[var(--muted)]">قهرمان دوره {i+1}</p></Card>)}</div></div>}

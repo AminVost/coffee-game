@@ -1,0 +1,4 @@
+import { Bell, CalendarClock, CheckCircle2 } from "lucide-react";
+import { Card } from "@/components/ui/card";
+const items=[["ثبت‌نام شما تایید شد","جام جمعه FC 26",CheckCircle2],["قرعه‌کشی فردا ساعت ۲۰","اعلان مسابقه",CalendarClock],["نوبت بازی شما نزدیک است","PS5 شماره ۳",Bell]] as const;
+export default function Notifications(){return <div><p className="section-kicker">NOTIFICATIONS</p><h1 className="section-title mt-2">اعلان‌ها</h1><div className="mt-7 grid gap-3">{items.map(([title,desc,Icon])=><Card key={title} className="flex items-center gap-4 p-5"><span className="grid h-11 w-11 place-items-center rounded-xl bg-[var(--brand)]/12 text-[var(--brand)]"><Icon size={19}/></span><div><strong>{title}</strong><p className="mt-1 text-xs text-[var(--muted)]">{desc}</p></div></Card>)}</div></div>}

@@ -1,0 +1,3 @@
+import { Shuffle } from "lucide-react";
+import { Card } from "@/components/ui/card";
+export default function Draw(){const names=["علی","مهدی","سینا","امیر","کیان","پویا","بابک","فرهاد"];return <div className="page-shell"><p className="section-kicker">LIVE DRAW</p><h1 className="section-title mt-2">قرعه‌کشی زنده</h1><Card className="mt-8 overflow-hidden p-6 sm:p-10"><div className="mx-auto grid max-w-4xl grid-cols-2 gap-3 sm:grid-cols-4">{names.map((n,i)=><div key={n} className="rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-5 text-center font-black"><Shuffle className="mx-auto mb-3 text-[var(--brand)]"/>{n}<span className="mt-2 block text-xs text-[var(--muted)]">Seed {i+1}</span></div>)}</div></Card></div>}

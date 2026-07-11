@@ -1,0 +1,5 @@
+import Image from "next/image";
+import Link from "next/link";
+import { LoginForm } from "@/components/forms/login-form";
+import { Card } from "@/components/ui/card";
+export default function Login(){return <main className="grid min-h-screen place-items-center p-4"><div className="glow right-0 top-0 bg-emerald-500"/><Card className="relative grid w-full max-w-4xl overflow-hidden lg:grid-cols-2"><div className="hidden bg-black p-8 lg:block"><Image src="/brand/logo-dark.png" alt="Coffee Game" width={900} height={700} className="h-full w-full rounded-[1.5rem] object-cover"/></div><div className="p-6 sm:p-10"><Link href="/" className="text-sm font-black text-[var(--brand)]">بازگشت به سایت</Link><h1 className="mt-8 text-3xl font-black">ورود به Coffee Game</h1><p className="mt-2 text-sm text-[var(--muted)]">ورود با رمز، پیامک آزمایشی یا Google</p><div className="mt-8"><LoginForm/></div><p className="mt-6 text-center text-sm text-[var(--muted)]">حساب نداری؟ <Link href="/register" className="font-black text-[var(--brand)]">ثبت‌نام</Link></p></div></Card></main>}
