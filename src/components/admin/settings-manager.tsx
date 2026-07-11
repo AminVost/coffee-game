@@ -2,8 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { Save, ShieldCheck } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { SelectField } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
 type Settings = {
   club: { name: string; phone: string; address: string };
@@ -11,6 +17,10 @@ type Settings = {
   payment: { cash: boolean; receipt: boolean; partial: boolean };
   notification: { inApp: boolean; email: boolean; sms: "disabled" | "optional" | "required" };
 };
+
+function ToggleRow({ label, checked, onCheckedChange }: { label: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+  return <div className="flex items-center justify-between rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-sm font-bold"><span>{label}</span><Switch checked={checked} onCheckedChange={onCheckedChange} aria-label={label} /></div>;
+}
 
 export function SettingsManager() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -36,5 +46,30 @@ export function SettingsManager() {
   }
 
   if (!settings) return <p className="mt-7 text-sm text-[var(--muted)]">{error || "در حال دریافت تنظیمات..."}</p>;
-  return <><div className="mt-7 grid gap-6 lg:grid-cols-2"><Card className="p-6"><h2 className="font-black">اطلاعات مجموعه</h2><div className="mt-5 grid gap-4"><label className="field-label">نام مجموعه<input className="field" value={settings.club.name} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, name: event.target.value } })}/></label><label className="field-label">شماره تماس<input className="field" dir="ltr" value={settings.club.phone} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, phone: event.target.value } })}/></label><label className="field-label">آدرس<textarea className="field" value={settings.club.address} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, address: event.target.value } })}/></label></div></Card><Card className="p-6"><h2 className="flex items-center gap-2 font-black"><ShieldCheck className="text-[var(--brand)]"/>امنیت و سرویس‌ها</h2><div className="mt-5 grid gap-4"><label className="field-label">ورود دومرحله‌ای مدیر<select className="field" value={settings.auth.admin2fa} onChange={(event) => setSettings({ ...settings, auth: { admin2fa: event.target.value as Settings["auth"]["admin2fa"] } })}><option value="optional">اختیاری</option><option value="required">اجباری</option></select></label><label className="flex items-center justify-between rounded-xl bg-[var(--surface-2)] p-4 text-sm font-bold"><span>پرداخت حضوری</span><input type="checkbox" checked={settings.payment.cash} onChange={(event) => setSettings({ ...settings, payment: { ...settings.payment, cash: event.target.checked } })}/></label><label className="flex items-center justify-between rounded-xl bg-[var(--surface-2)] p-4 text-sm font-bold"><span>آپلود فیش</span><input type="checkbox" checked={settings.payment.receipt} onChange={(event) => setSettings({ ...settings, payment: { ...settings.payment, receipt: event.target.checked } })}/></label><label className="flex items-center justify-between rounded-xl bg-[var(--surface-2)] p-4 text-sm font-bold"><span>اعلان داخل برنامه</span><input type="checkbox" checked={settings.notification.inApp} onChange={(event) => setSettings({ ...settings, notification: { ...settings.notification, inApp: event.target.checked } })}/></label><p className="rounded-2xl bg-amber-500/10 p-4 text-xs leading-6 text-amber-600">کلیدهای SMS.ir و درگاه پرداخت فقط از فایل env سرور خوانده می‌شوند و در دیتابیس ذخیره نمی‌شوند.</p></div></Card></div>{error && <p className="mt-4 rounded-xl bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}{message && <p className="mt-4 rounded-xl bg-emerald-500/10 p-3 text-sm text-emerald-600">{message}</p>}<Button className="mt-5" onClick={save} disabled={saving}><Save size={16}/>{saving ? "در حال ذخیره" : "ذخیره تنظیمات"}</Button></>;
+
+  return <>
+    <div className="mt-7 grid gap-6 lg:grid-cols-2">
+      <Card className="p-6">
+        <h2 className="font-black">اطلاعات مجموعه</h2>
+        <div className="mt-5 grid gap-4">
+          <Label>نام مجموعه<Input value={settings.club.name} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, name: event.target.value } })} /></Label>
+          <Label>شماره تماس<Input dir="ltr" value={settings.club.phone} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, phone: event.target.value } })} /></Label>
+          <Label>آدرس<Textarea value={settings.club.address} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, address: event.target.value } })} /></Label>
+        </div>
+      </Card>
+      <Card className="p-6">
+        <h2 className="flex items-center gap-2 font-black"><ShieldCheck className="text-[var(--brand)]" />امنیت و سرویس‌ها</h2>
+        <div className="mt-5 grid gap-4">
+          <Label>ورود دومرحله‌ای مدیر<SelectField value={settings.auth.admin2fa} onValueChange={(value) => setSettings({ ...settings, auth: { admin2fa: value as Settings["auth"]["admin2fa"] } })} options={[{ value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>
+          <ToggleRow label="پرداخت حضوری" checked={settings.payment.cash} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, cash: checked } })} />
+          <ToggleRow label="آپلود فیش" checked={settings.payment.receipt} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, receipt: checked } })} />
+          <ToggleRow label="اعلان داخل برنامه" checked={settings.notification.inApp} onCheckedChange={(checked) => setSettings({ ...settings, notification: { ...settings.notification, inApp: checked } })} />
+          <Alert tone="warning" className="text-xs font-normal">کلیدهای SMS.ir و درگاه پرداخت فقط از فایل env سرور خوانده می‌شوند و در دیتابیس ذخیره نمی‌شوند.</Alert>
+        </div>
+      </Card>
+    </div>
+    {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+    {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+    <Button className="mt-5" type="button" onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={16} />ذخیره تنظیمات</Button>
+  </>;
 }

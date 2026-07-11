@@ -3,8 +3,11 @@
 
 import { useEffect, useState } from "react";
 import { Check, Copy, Plus, Users, X } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 type TeamItem = { id: string; publicId: string; title: string; memberCount: number; isCaptain: boolean };
 
@@ -51,13 +54,21 @@ export function TeamsManager() {
   }
 
   return <>
-    <div className="flex justify-end"><Button size="sm" onClick={() => setOpen(true)}><Plus size={16}/>تیم جدید</Button></div>
-    {error && <p className="mt-4 rounded-xl bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
+    <div className="flex justify-end"><Button size="sm" type="button" onClick={() => setOpen(true)}><Plus size={16} />تیم جدید</Button></div>
+    {error && <Alert tone="error" className="mt-4">{error}</Alert>}
     <div className="mt-7 grid gap-4 lg:grid-cols-2">
-      {items.map((team) => <Card key={team.id} className="p-6"><div className="flex items-center gap-4"><span className="grid h-14 w-14 place-items-center rounded-2xl bg-[var(--brand)]/12 text-[var(--brand)]"><Users/></span><div><h2 className="text-lg font-black">{team.title}</h2><p className="mt-1 text-xs text-[var(--muted)]">{team.memberCount.toLocaleString("fa-IR")} عضو{team.isCaptain ? " · کاپیتان: شما" : ""}</p></div></div><div className="mt-5 flex items-center justify-between gap-3 rounded-2xl bg-[var(--surface-2)] p-4"><span className="truncate text-sm">کد دعوت: <strong dir="ltr">{team.publicId}</strong></span><button onClick={() => copyCode(team)} className="cursor-pointer text-[var(--brand)]">{copied === team.id ? <Check size={17}/> : <Copy size={17}/>}</button></div></Card>)}
+      {items.map((team) => <Card key={team.id} className="p-6">
+        <div className="flex items-center gap-4"><span className="grid h-14 w-14 place-items-center rounded-2xl bg-[var(--brand)]/12 text-[var(--brand)]"><Users /></span><div><h2 className="text-lg font-black">{team.title}</h2><p className="mt-1 text-xs text-[var(--muted)]">{team.memberCount.toLocaleString("fa-IR")} عضو{team.isCaptain ? " · کاپیتان: شما" : ""}</p></div></div>
+        <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl bg-[var(--surface-2)] p-4"><span className="truncate text-sm">کد دعوت: <strong dir="ltr">{team.publicId}</strong></span><Button type="button" variant="ghost" size="iconSm" onClick={() => copyCode(team)} aria-label="کپی کد دعوت">{copied === team.id ? <Check size={17} /> : <Copy size={17} />}</Button></div>
+      </Card>)}
       {!loading && !items.length && <Card className="p-10 text-center text-sm text-[var(--muted)]">هنوز تیمی نساخته‌اید.</Card>}
       {loading && <p className="text-sm text-[var(--muted)]">در حال دریافت تیم‌ها...</p>}
     </div>
-    {open && <div className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"><Card className="w-full max-w-md p-6"><div className="flex items-center justify-between"><h2 className="text-xl font-black">ساخت تیم جدید</h2><button onClick={() => setOpen(false)} className="grid h-10 w-10 place-items-center rounded-xl border border-[var(--line)]"><X size={18}/></button></div><form onSubmit={createTeam} className="mt-6 grid gap-5"><label className="field-label">نام تیم<input className="field" value={title} onChange={(event) => setTitle(event.target.value)} minLength={2} maxLength={140} required autoFocus/></label><p className="text-xs leading-6 text-[var(--muted)]">پس از ساخت، شما به‌عنوان کاپیتان ثبت می‌شوید و کد دعوت اختصاصی تیم نمایش داده می‌شود.</p><Button type="submit" disabled={saving}>{saving ? "در حال ساخت" : "ساخت تیم"}</Button></form></Card></div>}
+    {open && <div className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4">
+      <Card className="w-full max-w-md p-6">
+        <div className="flex items-center justify-between"><h2 className="text-xl font-black">ساخت تیم جدید</h2><Button type="button" onClick={() => setOpen(false)} variant="secondary" size="iconSm" aria-label="بستن"><X size={18} /></Button></div>
+        <form onSubmit={createTeam} className="mt-6 grid gap-5"><Label>نام تیم<Input value={title} onChange={(event) => setTitle(event.target.value)} minLength={2} maxLength={140} required autoFocus /></Label><p className="text-xs leading-6 text-[var(--muted)]">پس از ساخت، شما به‌عنوان کاپیتان ثبت می‌شوید و کد دعوت اختصاصی تیم نمایش داده می‌شود.</p><Button type="submit" loading={saving} loadingText="در حال ساخت">ساخت تیم</Button></form>
+      </Card>
+    </div>}
   </>;
 }

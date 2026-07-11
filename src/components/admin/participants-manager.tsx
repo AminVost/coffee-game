@@ -2,8 +2,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search, UserCheck, UserX, Undo2 } from "lucide-react";
+import { Search, Undo2, UserCheck, UserX } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 
 type RegistrationItem = {
   id: string;
@@ -72,33 +75,37 @@ export function ParticipantsManager() {
     } : item));
   }
 
-  return <div>
-    <div className="mt-6 flex max-w-md items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-4">
-      <Search size={17} className="text-[var(--muted)]"/>
-      <input className="h-12 flex-1 bg-transparent outline-none" placeholder="نام، موبایل یا مسابقه..." value={query} onChange={(event) => setQuery(event.target.value)}/>
+  return (
+    <div>
+      <label className="relative mt-6 block max-w-md">
+        <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={17} />
+        <Input className="pr-11" placeholder="نام، موبایل یا مسابقه..." value={query} onChange={(event) => setQuery(event.target.value)} />
+      </label>
+      {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+      <Card className="mt-5 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[850px] text-right text-sm">
+            <thead className="bg-[var(--surface-2)]"><tr><th className="p-4">شرکت‌کننده</th><th className="p-4">مسابقه</th><th className="p-4">سهم</th><th className="p-4">وضعیت</th><th className="p-4">عملیات</th></tr></thead>
+            <tbody>
+              {filtered.map((item) => <tr key={item.id} className="border-t border-[var(--line)]">
+                <td className="p-4 font-bold">{item.names}<span className="block text-xs font-normal text-[var(--muted)]" dir="ltr">{item.mobiles}</span></td>
+                <td className="p-4">{item.tournamentTitle}</td>
+                <td className="p-4">{item.slots.toLocaleString("fa-IR")}</td>
+                <td className="p-4">{statusTitle[item.status] || item.status}</td>
+                <td className="p-4">
+                  <div className="flex flex-wrap gap-2">
+                    {item.status !== "CHECKED_IN" && <Button size="sm" variant="soft" disabled={busyId === item.id} onClick={() => changeStatus(item.id, "CHECKED_IN")}><UserCheck size={15} />ثبت حضور</Button>}
+                    {item.status !== "NO_SHOW" && <Button size="sm" variant="secondary" className="text-amber-600" disabled={busyId === item.id} onClick={() => changeStatus(item.id, "NO_SHOW")}><UserX size={15} />عدم حضور</Button>}
+                    {["CHECKED_IN", "NO_SHOW"].includes(item.status) && <Button size="sm" variant="ghost" disabled={busyId === item.id} onClick={() => changeStatus(item.id, "CONFIRMED")}><Undo2 size={15} />بازگردانی</Button>}
+                  </div>
+                </td>
+              </tr>)}
+              {!loading && !filtered.length && <tr><td colSpan={5} className="p-10 text-center text-[var(--muted)]">موردی پیدا نشد.</td></tr>}
+              {loading && <tr><td colSpan={5} className="p-10 text-center text-[var(--muted)]">در حال دریافت...</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
-    {error && <p className="mt-4 rounded-xl bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
-    <Card className="mt-5 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[850px] text-right text-sm">
-          <thead className="bg-[var(--surface-2)]"><tr><th className="p-4">شرکت‌کننده</th><th className="p-4">مسابقه</th><th className="p-4">سهم</th><th className="p-4">وضعیت</th><th className="p-4">عملیات</th></tr></thead>
-          <tbody>
-            {filtered.map((item) => <tr key={item.id} className="border-t border-[var(--line)]">
-              <td className="p-4 font-bold">{item.names}<span className="block text-xs font-normal text-[var(--muted)]" dir="ltr">{item.mobiles}</span></td>
-              <td className="p-4">{item.tournamentTitle}</td>
-              <td className="p-4">{item.slots.toLocaleString("fa-IR")}</td>
-              <td className="p-4">{statusTitle[item.status] || item.status}</td>
-              <td className="p-4"><div className="flex flex-wrap gap-2">
-                {item.status !== "CHECKED_IN" && <button disabled={busyId === item.id} onClick={() => changeStatus(item.id, "CHECKED_IN")} className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-emerald-500/12 px-3 py-2 text-xs font-bold text-emerald-600 disabled:opacity-50"><UserCheck size={15}/>ثبت حضور</button>}
-                {item.status !== "NO_SHOW" && <button disabled={busyId === item.id} onClick={() => changeStatus(item.id, "NO_SHOW")} className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-amber-500/12 px-3 py-2 text-xs font-bold text-amber-600 disabled:opacity-50"><UserX size={15}/>عدم حضور</button>}
-                {["CHECKED_IN","NO_SHOW"].includes(item.status) && <button disabled={busyId === item.id} onClick={() => changeStatus(item.id, "CONFIRMED")} className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[var(--line)] px-3 py-2 text-xs font-bold disabled:opacity-50"><Undo2 size={15}/>بازگردانی</button>}
-              </div></td>
-            </tr>)}
-            {!loading && !filtered.length && <tr><td colSpan={5} className="p-10 text-center text-[var(--muted)]">موردی پیدا نشد.</td></tr>}
-            {loading && <tr><td colSpan={5} className="p-10 text-center text-[var(--muted)]">در حال دریافت...</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  </div>;
+  );
 }

@@ -3,8 +3,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Eye, Upload } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { formatToman } from "@/lib/utils";
 
 type PaymentItem = { id: string; publicId: string; tournamentTitle: string; amount: number; method: string; status: string; rejectedReason: string | null; receiptUrl: string | null };
@@ -48,10 +50,10 @@ export function PaymentsList() {
   }
 
   return <>
-    <input ref={inputRef} className="hidden" type="file" accept="image/jpeg,image/png,application/pdf" onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }}/>
-    {error && <p className="mt-4 rounded-xl bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
+    <Input ref={inputRef} className="hidden" type="file" accept="image/jpeg,image/png,application/pdf" onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+    {error && <Alert tone="error" className="mt-4">{error}</Alert>}
     <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[700px] text-right text-sm"><thead className="bg-[var(--surface-2)]"><tr><th className="p-4">مسابقه</th><th className="p-4">مبلغ</th><th className="p-4">وضعیت</th><th className="p-4">عملیات</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4 font-bold">{item.tournamentTitle}</td><td className="p-4">{formatToman(item.amount)}</td><td className="p-4">{statusTitle[item.status] || item.status}{item.rejectedReason && <span className="block text-xs text-red-500">{item.rejectedReason}</span>}</td><td className="p-4"><div className="flex gap-2">{item.receiptUrl && <a href={item.receiptUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-[var(--line)] px-3 py-2 text-xs font-bold"><Eye size={15}/>مشاهده</a>}{!['APPROVED','REFUNDED','CANCELLED'].includes(item.status) && <Button size="sm" variant="secondary" disabled={busyId === item.id} onClick={() => chooseFile(item)}><Upload size={15}/>{busyId === item.id ? "در حال آپلود" : "آپلود فیش"}</Button>}</div></td></tr>)}
+      {items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4 font-bold">{item.tournamentTitle}</td><td className="p-4">{formatToman(item.amount)}</td><td className="p-4">{statusTitle[item.status] || item.status}{item.rejectedReason && <span className="block text-xs text-red-500">{item.rejectedReason}</span>}</td><td className="p-4"><div className="flex gap-2">{item.receiptUrl && <Button href={item.receiptUrl} target="_blank" rel="noreferrer" variant="secondary" size="sm"><Eye size={15} />مشاهده</Button>}{!['APPROVED','REFUNDED','CANCELLED'].includes(item.status) && <Button size="sm" variant="secondary" disabled={busyId === item.id} onClick={() => chooseFile(item)} loading={busyId === item.id} loadingText="در حال آپلود"><Upload size={15} />آپلود فیش</Button>}</div></td></tr>)}
       {!loading && !items.length && <tr><td colSpan={4} className="p-10 text-center text-[var(--muted)]">پرداختی وجود ندارد.</td></tr>}
       {loading && <tr><td colSpan={4} className="p-10 text-center text-[var(--muted)]">در حال دریافت...</td></tr>}
     </tbody></table></div></Card>

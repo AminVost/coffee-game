@@ -14,8 +14,12 @@ import {
   Users,
   X
 } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { SelectField } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 type PlayerItem = {
@@ -150,7 +154,7 @@ function PlayerDetails({ player, onClose }: { player: PlayerItem; onClose: () =>
   ];
 
   return <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/65 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true">
-    <button aria-label="بستن جزئیات" className="absolute inset-0 cursor-default" onClick={onClose}/>
+    <Button type="button" aria-label="بستن جزئیات" variant="ghost" className="absolute inset-0 h-auto w-auto rounded-none p-0" onClick={onClose} />
     <Card className="relative z-10 max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-b-none p-5 sm:rounded-[1.75rem] sm:p-7">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -163,9 +167,9 @@ function PlayerDetails({ player, onClose }: { player: PlayerItem; onClose: () =>
             </div>
           </div>
         </div>
-        <button onClick={onClose} className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-xl border border-[var(--line)] hover:bg-[var(--surface-2)]" aria-label="بستن">
+        <Button type="button" onClick={onClose} variant="secondary" size="iconSm" aria-label="بستن">
           <X size={18}/>
-        </button>
+        </Button>
       </div>
 
       <div className="mt-7 grid gap-3 sm:grid-cols-2">
@@ -269,33 +273,41 @@ export function PlayersManager() {
 
     <Card className="mt-5 p-4 sm:p-5">
       <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_190px_190px]">
-        <label className="flex h-12 items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] px-4">
-          <Search size={17} className="text-[var(--muted)]"/>
-          <input
-            className="min-w-0 flex-1 bg-transparent outline-none"
+        <label className="relative block">
+          <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={17}/>
+          <Input
+            className="pr-11"
             placeholder="جستجو با نام، موبایل یا ایمیل..."
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
         </label>
 
-        <select className="h-12 rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] px-4 outline-none" value={type} onChange={(event) => changeType(event.target.value)}>
-          <option value="all">همه نوع‌ها</option>
-          <option value="member">اعضای دارای حساب</option>
-          <option value="guest">بازیکنان مهمان</option>
-        </select>
+        <SelectField
+          value={type}
+          onValueChange={changeType}
+          options={[
+            { value: "all", label: "همه نوع‌ها" },
+            { value: "member", label: "اعضای دارای حساب" },
+            { value: "guest", label: "بازیکنان مهمان" }
+          ]}
+        />
 
-        <select className="h-12 rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] px-4 outline-none" value={status} onChange={(event) => changeStatus(event.target.value)}>
-          <option value="all">همه وضعیت‌ها</option>
-          <option value="ACTIVE">فعال</option>
-          <option value="PENDING">در انتظار</option>
-          <option value="SUSPENDED">مسدود</option>
-          <option value="GUEST">بدون حساب</option>
-        </select>
+        <SelectField
+          value={status}
+          onValueChange={changeStatus}
+          options={[
+            { value: "all", label: "همه وضعیت‌ها" },
+            { value: "ACTIVE", label: "فعال" },
+            { value: "PENDING", label: "در انتظار" },
+            { value: "SUSPENDED", label: "مسدود" },
+            { value: "GUEST", label: "بدون حساب" }
+          ]}
+        />
       </div>
     </Card>
 
-    {error && <p className="mt-4 rounded-xl bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
+    {error && <Alert tone="error" className="mt-4">{error}</Alert>}
 
     <Card className="mt-5 overflow-hidden">
       <div className="overflow-x-auto">
@@ -345,13 +357,10 @@ export function PlayersManager() {
               </td>
               <td className="p-4 text-[var(--muted)]">{formatDate(player.createdAt)}</td>
               <td className="p-4">
-                <button
-                  onClick={() => setSelected(player)}
-                  className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-xl border border-[var(--line)] px-3 text-xs font-bold transition hover:border-[var(--brand)] hover:text-[var(--brand)]"
-                >
+                <Button type="button" onClick={() => setSelected(player)} variant="secondary" size="sm">
                   <Eye size={15}/>
                   مشاهده
-                </button>
+                </Button>
               </td>
             </tr>)}
 
@@ -370,25 +379,15 @@ export function PlayersManager() {
       <div className="flex flex-col gap-3 border-t border-[var(--line)] p-4 sm:flex-row sm:items-center sm:justify-between">
         <span className="text-xs font-bold text-[var(--muted)]">{rangeText}</span>
         <div className="flex items-center gap-2">
-          <button
-            disabled={pagination.page <= 1 || loading}
-            onClick={() => setPage((current) => Math.max(1, current - 1))}
-            className="grid h-10 w-10 cursor-pointer place-items-center rounded-xl border border-[var(--line)] disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="صفحه قبل"
-          >
+          <Button type="button" variant="secondary" size="iconSm" disabled={pagination.page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))} aria-label="صفحه قبل">
             <ChevronRight size={17}/>
-          </button>
+          </Button>
           <span className="min-w-24 text-center text-xs font-bold">
             صفحه {formatNumber(pagination.page)} از {formatNumber(pagination.totalPages)}
           </span>
-          <button
-            disabled={pagination.page >= pagination.totalPages || loading}
-            onClick={() => setPage((current) => Math.min(pagination.totalPages, current + 1))}
-            className="grid h-10 w-10 cursor-pointer place-items-center rounded-xl border border-[var(--line)] disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="صفحه بعد"
-          >
+          <Button type="button" variant="secondary" size="iconSm" disabled={pagination.page >= pagination.totalPages || loading} onClick={() => setPage((current) => Math.min(pagination.totalPages, current + 1))} aria-label="صفحه بعد">
             <ChevronLeft size={17}/>
-          </button>
+          </Button>
         </div>
       </div>
     </Card>

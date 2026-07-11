@@ -2,13 +2,32 @@
 
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
 
 export function LogoutButton({ compact = false }: { compact?: boolean }) {
   const router = useRouter();
+  const [loading, setLoading] = useState(false);
+
   async function logout() {
+    setLoading(true);
     await fetch("/api/auth/logout", { method: "POST" });
-    router.replace("/login");
+    router.push("/login");
     router.refresh();
   }
-  return <button onClick={logout} className={`flex w-full cursor-pointer items-center gap-2 rounded-xl text-sm font-bold text-red-500 ${compact ? "px-2 py-2" : "px-3 py-3"}`}><LogOut size={16}/>خروج</button>;
+
+  return (
+    <Button
+      type="button"
+      variant="dangerSoft"
+      size={compact ? "sm" : "md"}
+      className="w-full justify-start"
+      onClick={logout}
+      loading={loading}
+      loadingText="در حال خروج..."
+    >
+      <LogOut size={16} />
+      خروج
+    </Button>
+  );
 }

@@ -2,8 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Save, Sparkles } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { SelectField } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
 const steps = ["اطلاعات پایه", "فرمت و ظرفیت", "پرداخت", "قوانین و زمان", "انتشار"];
 type Option = { id: number; title: string };
@@ -186,15 +192,63 @@ export function TournamentBuilder() {
   }
 
   return <div>
-    <div className="mb-7 overflow-x-auto"><div className="flex min-w-[680px] items-center">{steps.map((label, index) => <div key={label} className="flex flex-1 items-center"><span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full font-black ${index <= step ? "bg-[var(--brand)] text-white" : "bg-[var(--surface-2)] text-[var(--muted)]"}`}>{index < step ? <Check size={17}/> : index + 1}</span><span className={`mr-2 text-xs font-bold ${index <= step ? "text-[var(--text)]" : "text-[var(--muted)]"}`}>{label}</span>{index < steps.length - 1 && <span className="mx-3 h-px flex-1 bg-[var(--line)]"/>}</div>)}</div></div>
+    <div className="mb-7 overflow-x-auto">
+      <div className="flex min-w-[680px] items-center">
+        {steps.map((label, index) => <div key={label} className="flex flex-1 items-center">
+          <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full font-black ${index <= step ? "bg-[var(--brand)] text-white" : "bg-[var(--surface-2)] text-[var(--muted)]"}`}>{index < step ? <Check size={17}/> : index + 1}</span>
+          <span className={`mr-2 text-xs font-bold ${index <= step ? "text-[var(--text)]" : "text-[var(--muted)]"}`}>{label}</span>
+          {index < steps.length - 1 && <span className="mx-3 h-px flex-1 bg-[var(--line)]"/>}
+        </div>)}
+      </div>
+    </div>
+
     <Card className="p-6 sm:p-8">
-      {step === 0 && <div className="grid gap-5 sm:grid-cols-2"><label className="field-label sm:col-span-2">استفاده از قالب ذخیره‌شده<select className="field" value={form.templateId || ""} onChange={(event) => selectTemplate(event.target.value)}><option value="">بدون قالب</option>{templates.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><label className="field-label">عنوان مسابقه<input className="field" value={form.title} onChange={(event) => update("title", event.target.value)}/></label><label className="field-label">Slug انگلیسی<input className="field" dir="ltr" value={form.slug} onChange={(event) => update("slug", event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}/></label><label className="field-label">بازی<select className="field" value={form.gameId} onChange={(event) => update("gameId", Number(event.target.value))}>{games.map((game) => <option key={game.id} value={game.id}>{game.title}</option>)}</select></label><label className="field-label">محل<select className="field" value={form.venueId || ""} onChange={(event) => update("venueId", event.target.value ? Number(event.target.value) : null)}><option value="">بدون محل</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.title}</option>)}</select></label><label className="field-label sm:col-span-2">توضیحات<textarea className="field" value={form.description} onChange={(event) => update("description", event.target.value)}/></label></div>}
-      {step === 1 && <div className="grid gap-5 sm:grid-cols-2"><label className="field-label">فرمت<select className="field" value={form.format} onChange={(event) => update("format", event.target.value)}><option>حذفی تک‌بازی</option><option>حذفی رفت‌وبرگشت</option><option>دوحذفی</option><option>گروهی و سپس حذفی</option><option>لیگ دوره‌ای</option><option>Swiss System</option></select></label><label className="field-label">نوع شرکت<select className="field" value={form.participantType} onChange={(event) => update("participantType", event.target.value as FormState["participantType"])}><option value="INDIVIDUAL">انفرادی</option><option value="TEAM">تیمی</option></select></label>{form.participantType === "TEAM" && <label className="field-label">تعداد اعضای تیم<input className="field" type="number" min="2" max="10" value={form.teamSize} onChange={(event) => update("teamSize", Number(event.target.value))}/></label>}<label className="field-label">ظرفیت سهم/تیم<input className="field" type="number" min="2" value={form.capacity} onChange={(event) => update("capacity", Number(event.target.value))}/></label><label className="field-label">نوع قرعه<select className="field" value={form.drawMode} onChange={(event) => update("drawMode", event.target.value as FormState["drawMode"])}><option value="random">تصادفی</option><option value="seeded">Seed شده</option><option value="custom">دستی</option></select></label><label className="field-label">مسابقه رده‌بندی<select className="field" value={form.hasThirdPlace ? "yes" : "no"} onChange={(event) => update("hasThirdPlace", event.target.value === "yes")}><option value="yes">فعال</option><option value="no">غیرفعال</option></select></label><label className="field-label">خرید چند سهم<select className="field" value={form.allowMultiSlot ? "yes" : "no"} onChange={(event) => update("allowMultiSlot", event.target.value === "yes")}><option value="yes">فعال</option><option value="no">غیرفعال</option></select></label></div>}
-      {step === 2 && <div className="grid gap-5 sm:grid-cols-2"><label className="field-label">هزینه هر سهم (تومان)<input className="field" type="number" min="0" value={form.price} onChange={(event) => update("price", Number(event.target.value))}/></label><label className="field-label">مهلت رزرو بدون پرداخت (دقیقه)<input className="field" type="number" min="5" value={form.reservationExpiresMin} onChange={(event) => update("reservationExpiresMin", Number(event.target.value))}/></label><p className="sm:col-span-2 rounded-2xl bg-[var(--surface-2)] p-4 text-sm leading-7 text-[var(--muted)]">روش‌های پرداخت فعال پروژه شامل درگاه Mock، پرداخت حضوری و فیش بانکی است. تنظیم سرویس واقعی از فایل env انجام می‌شود.</p></div>}
-      {step === 3 && <div className="grid gap-5 sm:grid-cols-2"><label className="field-label">شروع مسابقه<input className="field" type="datetime-local" value={form.startsAt} onChange={(event) => update("startsAt", event.target.value)}/></label><label className="field-label">مهلت تاخیر (دقیقه)<input className="field" type="number" min="0" value={form.lateToleranceMin} onChange={(event) => update("lateToleranceMin", Number(event.target.value))}/></label><label className="field-label">جایگزینی لیست انتظار<select className="field" value={form.waitlistMode} onChange={(event) => update("waitlistMode", event.target.value as FormState["waitlistMode"])}><option value="offer">پیشنهاد با مهلت پاسخ</option><option value="manual">دستی</option><option value="automatic">خودکار</option></select></label><label className="field-label sm:col-span-2">قوانین؛ هر قانون در یک خط<textarea className="field min-h-40" value={form.rulesText} onChange={(event) => update("rulesText", event.target.value)}/></label></div>}
-      {step === 4 && <div className="text-center"><span className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-emerald-500/12 text-emerald-500"><Sparkles size={30}/></span><h2 className="mt-5 text-2xl font-black">مسابقه آماده ذخیره است</h2><label className="mx-auto mt-6 block max-w-sm text-right field-label">وضعیت اولیه<select className="field" value={form.status} onChange={(event) => update("status", event.target.value as FormState["status"])}><option value="DRAFT">پیش‌نویس</option><option value="PUBLISHED">منتشرشده</option><option value="REGISTRATION_OPEN">ثبت‌نام باز</option></select></label><label className="mx-auto mt-4 flex max-w-sm items-center justify-between rounded-2xl bg-[var(--surface-2)] p-4 text-sm font-bold"><span>ذخیره تنظیمات به‌عنوان قالب</span><input type="checkbox" className="h-5 w-5 accent-[var(--brand)]" checked={saveAsTemplate} onChange={(event) => setSaveAsTemplate(event.target.checked)}/></label>{savedSlug && <p className="mt-5 rounded-xl bg-emerald-500/10 p-4 font-black text-emerald-600">مسابقه ذخیره شد. <a className="underline" href={`/tournaments/${savedSlug}`}>مشاهده صفحه مسابقه</a></p>}</div>}
-      {error && <p className="mt-6 rounded-xl bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
-      <div className="mt-8 flex justify-between border-t border-[var(--line)] pt-6"><Button variant="secondary" disabled={step === 0 || saving} onClick={() => setStep(step - 1)}><ChevronRight size={17}/>قبلی</Button>{step < steps.length - 1 ? <Button disabled={!canNext} onClick={() => setStep(step + 1)}>مرحله بعد<ChevronLeft size={17}/></Button> : <Button disabled={saving || Boolean(savedSlug)} onClick={save}><Save size={17}/>{saving ? "در حال ذخیره" : "ذخیره مسابقه"}</Button>}</div>
+      {step === 0 && <div className="grid gap-5 sm:grid-cols-2">
+        <Label className="sm:col-span-2">استفاده از قالب ذخیره‌شده<SelectField value={form.templateId ? String(form.templateId) : "none"} onValueChange={(value) => selectTemplate(value === "none" ? "" : value)} options={[{ value: "none", label: "بدون قالب" }, ...templates.map((item) => ({ value: String(item.id), label: item.title }))]} /></Label>
+        <Label>عنوان مسابقه<Input value={form.title} onChange={(event) => update("title", event.target.value)} /></Label>
+        <Label>Slug انگلیسی<Input dir="ltr" value={form.slug} onChange={(event) => update("slug", event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))} /></Label>
+        <Label>بازی<SelectField value={String(form.gameId)} onValueChange={(value) => update("gameId", Number(value))} options={games.map((game) => ({ value: String(game.id), label: game.title }))} /></Label>
+        <Label>محل<SelectField value={form.venueId ? String(form.venueId) : "none"} onValueChange={(value) => update("venueId", value === "none" ? null : Number(value))} options={[{ value: "none", label: "بدون محل" }, ...venues.map((venue) => ({ value: String(venue.id), label: venue.title }))]} /></Label>
+        <Label className="sm:col-span-2">توضیحات<Textarea value={form.description} onChange={(event) => update("description", event.target.value)} /></Label>
+      </div>}
+
+      {step === 1 && <div className="grid gap-5 sm:grid-cols-2">
+        <Label>فرمت<SelectField value={form.format} onValueChange={(value) => update("format", value)} options={["حذفی تک‌بازی", "حذفی رفت‌وبرگشت", "دوحذفی", "گروهی و سپس حذفی", "لیگ دوره‌ای", "Swiss System"].map((value) => ({ value, label: value }))} /></Label>
+        <Label>نوع شرکت<SelectField value={form.participantType} onValueChange={(value) => update("participantType", value as FormState["participantType"])} options={[{ value: "INDIVIDUAL", label: "انفرادی" }, { value: "TEAM", label: "تیمی" }]} /></Label>
+        {form.participantType === "TEAM" && <Label>تعداد اعضای تیم<Input type="number" min="2" max="10" value={form.teamSize} onChange={(event) => update("teamSize", Number(event.target.value))} /></Label>}
+        <Label>ظرفیت سهم/تیم<Input type="number" min="2" value={form.capacity} onChange={(event) => update("capacity", Number(event.target.value))} /></Label>
+        <Label>نوع قرعه<SelectField value={form.drawMode} onValueChange={(value) => update("drawMode", value as FormState["drawMode"])} options={[{ value: "random", label: "تصادفی" }, { value: "seeded", label: "Seed شده" }, { value: "custom", label: "دستی" }]} /></Label>
+        <Label>مسابقه رده‌بندی<SelectField value={form.hasThirdPlace ? "yes" : "no"} onValueChange={(value) => update("hasThirdPlace", value === "yes")} options={[{ value: "yes", label: "فعال" }, { value: "no", label: "غیرفعال" }]} /></Label>
+        <Label>خرید چند سهم<SelectField value={form.allowMultiSlot ? "yes" : "no"} onValueChange={(value) => update("allowMultiSlot", value === "yes")} options={[{ value: "yes", label: "فعال" }, { value: "no", label: "غیرفعال" }]} /></Label>
+      </div>}
+
+      {step === 2 && <div className="grid gap-5 sm:grid-cols-2">
+        <Label>هزینه هر سهم (تومان)<Input type="number" min="0" value={form.price} onChange={(event) => update("price", Number(event.target.value))} /></Label>
+        <Label>مهلت رزرو بدون پرداخت (دقیقه)<Input type="number" min="5" value={form.reservationExpiresMin} onChange={(event) => update("reservationExpiresMin", Number(event.target.value))} /></Label>
+        <Alert tone="info" className="sm:col-span-2">روش‌های پرداخت فعال پروژه شامل درگاه Mock، پرداخت حضوری و فیش بانکی است. تنظیم سرویس واقعی از فایل env انجام می‌شود.</Alert>
+      </div>}
+
+      {step === 3 && <div className="grid gap-5 sm:grid-cols-2">
+        <Label>شروع مسابقه<Input type="datetime-local" value={form.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Label>
+        <Label>مهلت تاخیر (دقیقه)<Input type="number" min="0" value={form.lateToleranceMin} onChange={(event) => update("lateToleranceMin", Number(event.target.value))} /></Label>
+        <Label>جایگزینی لیست انتظار<SelectField value={form.waitlistMode} onValueChange={(value) => update("waitlistMode", value as FormState["waitlistMode"])} options={[{ value: "offer", label: "پیشنهاد با مهلت پاسخ" }, { value: "manual", label: "دستی" }, { value: "automatic", label: "خودکار" }]} /></Label>
+        <Label className="sm:col-span-2">قوانین؛ هر قانون در یک خط<Textarea className="min-h-40" value={form.rulesText} onChange={(event) => update("rulesText", event.target.value)} /></Label>
+      </div>}
+
+      {step === 4 && <div className="text-center">
+        <span className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-emerald-500/12 text-emerald-500"><Sparkles size={30}/></span>
+        <h2 className="mt-5 text-2xl font-black">مسابقه آماده ذخیره است</h2>
+        <Label className="mx-auto mt-6 max-w-sm text-right">وضعیت اولیه<SelectField value={form.status} onValueChange={(value) => update("status", value as FormState["status"])} options={[{ value: "DRAFT", label: "پیش‌نویس" }, { value: "PUBLISHED", label: "منتشرشده" }, { value: "REGISTRATION_OPEN", label: "ثبت‌نام باز" }]} /></Label>
+        <div className="mx-auto mt-4 flex max-w-sm items-center justify-between rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-sm font-bold"><span>ذخیره تنظیمات به‌عنوان قالب</span><Switch checked={saveAsTemplate} onCheckedChange={setSaveAsTemplate} aria-label="ذخیره به عنوان قالب" /></div>
+        {savedSlug && <Alert tone="success" className="mx-auto mt-5 max-w-xl justify-center">مسابقه ذخیره شد. <a className="underline" href={`/tournaments/${savedSlug}`}>مشاهده صفحه مسابقه</a></Alert>}
+      </div>}
+
+      {error && <Alert tone="error" className="mt-6">{error}</Alert>}
+
+      <div className="mt-8 flex justify-between border-t border-[var(--line)] pt-6">
+        <Button type="button" variant="secondary" disabled={step === 0 || saving} onClick={() => setStep(step - 1)}><ChevronRight size={17}/>قبلی</Button>
+        {step < steps.length - 1 ? <Button type="button" disabled={!canNext} onClick={() => setStep(step + 1)}>مرحله بعد<ChevronLeft size={17}/></Button> : <Button type="button" disabled={Boolean(savedSlug)} onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={17}/>ذخیره مسابقه</Button>}
+      </div>
     </Card>
   </div>;
 }

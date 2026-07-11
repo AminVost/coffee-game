@@ -3,7 +3,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, Eye, Search, X } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { formatToman } from "@/lib/utils";
 
 type PaymentItem = {
@@ -70,17 +73,38 @@ export function PaymentsManager() {
     setItems((current) => current.map((item) => item.id === id ? { ...item, status: payload.status, rejectedReason: reason || null } : item));
   }
 
-  return <>
-    <label className="mt-6 flex h-12 max-w-md items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-4"><Search size={17} className="text-[var(--muted)]"/><input className="min-w-0 flex-1 bg-transparent outline-none" placeholder="پرداخت‌کننده یا مسابقه..." value={query} onChange={(event) => setQuery(event.target.value)}/></label>
-    {error && <p className="mt-4 rounded-xl bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
-    <Card className="mt-5 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[850px] text-right text-sm"><thead className="bg-[var(--surface-2)]"><tr><th className="p-4">پرداخت‌کننده</th><th className="p-4">مسابقه</th><th className="p-4">روش</th><th className="p-4">مبلغ</th><th className="p-4">وضعیت</th><th className="p-4">عملیات</th></tr></thead><tbody>
-      {filtered.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4 font-bold">{item.payerName}</td><td className="p-4">{item.tournamentTitle}</td><td className="p-4 text-[var(--muted)]">{methodTitle[item.method] || item.method}</td><td className="p-4">{formatToman(item.amount)}</td><td className="p-4">{statusTitle[item.status] || item.status}{item.rejectedReason && <span className="block max-w-xs text-xs text-red-500">{item.rejectedReason}</span>}</td><td className="p-4"><div className="flex gap-2">
-        {item.receiptUrl && <a href={item.receiptUrl} target="_blank" rel="noreferrer" className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--line)]" title="مشاهده فیش"><Eye size={15}/></a>}
-        {!['APPROVED','REFUNDED','CANCELLED'].includes(item.status) && <button disabled={busyId === item.id} onClick={() => update(item.id,"approve")} className="grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-emerald-500/12 text-emerald-500 disabled:opacity-50" title="تایید"><Check size={15}/></button>}
-        {!['APPROVED','REFUNDED','CANCELLED'].includes(item.status) && <button disabled={busyId === item.id} onClick={() => update(item.id,"reject")} className="grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-red-500/12 text-red-500 disabled:opacity-50" title="رد"><X size={15}/></button>}
-      </div></td></tr>)}
-      {!loading && !filtered.length && <tr><td colSpan={6} className="p-10 text-center text-[var(--muted)]">پرداختی پیدا نشد.</td></tr>}
-      {loading && <tr><td colSpan={6} className="p-10 text-center text-[var(--muted)]">در حال دریافت...</td></tr>}
-    </tbody></table></div></Card>
-  </>;
+  return (
+    <>
+      <label className="relative mt-6 block max-w-md">
+        <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={17} />
+        <Input className="pr-11" placeholder="پرداخت‌کننده یا مسابقه..." value={query} onChange={(event) => setQuery(event.target.value)} />
+      </label>
+      {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+      <Card className="mt-5 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[850px] text-right text-sm">
+            <thead className="bg-[var(--surface-2)]"><tr><th className="p-4">پرداخت‌کننده</th><th className="p-4">مسابقه</th><th className="p-4">روش</th><th className="p-4">مبلغ</th><th className="p-4">وضعیت</th><th className="p-4">عملیات</th></tr></thead>
+            <tbody>
+              {filtered.map((item) => <tr key={item.id} className="border-t border-[var(--line)]">
+                <td className="p-4 font-bold">{item.payerName}</td>
+                <td className="p-4">{item.tournamentTitle}</td>
+                <td className="p-4 text-[var(--muted)]">{methodTitle[item.method] || item.method}</td>
+                <td className="p-4">{formatToman(item.amount)}</td>
+                <td className="p-4">{statusTitle[item.status] || item.status}{item.rejectedReason && <span className="block max-w-xs text-xs text-red-500">{item.rejectedReason}</span>}</td>
+                <td className="p-4">
+                  <div className="flex gap-2">
+                    {item.receiptUrl && <Button href={item.receiptUrl} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده فیش"><Eye size={15} /></Button>}
+                    {!['APPROVED', 'REFUNDED', 'CANCELLED'].includes(item.status) && <Button type="button" disabled={busyId === item.id} onClick={() => update(item.id, "approve")} variant="soft" size="iconSm" aria-label="تایید پرداخت"><Check size={15} /></Button>}
+                    {!['APPROVED', 'REFUNDED', 'CANCELLED'].includes(item.status) && <Button type="button" disabled={busyId === item.id} onClick={() => update(item.id, "reject")} variant="dangerSoft" size="iconSm" aria-label="رد پرداخت"><X size={15} /></Button>}
+                  </div>
+                </td>
+              </tr>)}
+              {!loading && !filtered.length && <tr><td colSpan={6} className="p-10 text-center text-[var(--muted)]">پرداختی پیدا نشد.</td></tr>}
+              {loading && <tr><td colSpan={6} className="p-10 text-center text-[var(--muted)]">در حال دریافت...</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </>
+  );
 }
