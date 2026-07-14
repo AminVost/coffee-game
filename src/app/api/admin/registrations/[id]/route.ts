@@ -4,7 +4,6 @@ import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { writeAuditLog } from "@/lib/audit";
 import { execute, queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 const schema = z.object({ status: z.enum(["CONFIRMED", "CHECKED_IN", "NO_SHOW"]) });
 type RegistrationRow = RowDataPacket & { id: number; status: string };
@@ -17,16 +16,22 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const input = schema.parse(await request.json());
     const { id } = await params;
 
-    if (env.dataMode === "mock") return NextResponse.json({ ok: true, status: input.status });
-
     const rows = await queryRows<RegistrationRow[]>(`
       SELECT id,status FROM registrations WHERE id=? AND deleted_at IS NULL LIMIT 1
     `, [id]);
     const registration = rows[0];
     if (!registration) return NextResponse.json({ message: "ثبت‌نام یافت نشد." }, { status: 404 });
 
-    if (["CANCELLED", "REJECTED", "WAITLISTED"].includes(registration.status)) {
-      return NextResponse.json({ message: "وضعیت فعلی اجازه ثبت حضور را نمی‌دهد." }, { status: 409 });
+    const attendanceStatuses = ["CONFIRMED", "CHECKED_IN", "NO_SHOW"];
+    if (!attendanceStatuses.includes(registration.status)) {
+      return NextResponse.json({
+        message: "فقط ثبت‌نام قطعی امکان ثبت حضور یا عدم حضور دارد."
+      }, { status: 409 });
+    }
+    if (input.status === "CONFIRMED" && !["CHECKED_IN", "NO_SHOW"].includes(registration.status)) {
+      return NextResponse.json({
+        message: "بازگردانی فقط برای وضعیت حضور یا عدم حضور ممکن است."
+      }, { status: 409 });
     }
 
     await execute(`

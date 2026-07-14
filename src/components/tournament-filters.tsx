@@ -7,11 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Tournament } from "@/types";
 
-type Filter = "all" | "fc26" | "backgammon" | "open";
-
 export function TournamentFilters({ items }: { items: Tournament[] }) {
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+
+  const gameFilters = useMemo(() => {
+    const unique = new Map<string, string>();
+    for (const item of items) unique.set(item.game, item.gameTitle);
+    return Array.from(unique.entries()).map(([value, label]) => ({ value, label }));
+  }, [items]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -24,13 +28,17 @@ export function TournamentFilters({ items }: { items: Tournament[] }) {
     });
   }, [filter, items, query]);
 
-  const filters: Array<[Filter, string]> = [["all", "همه"], ["fc26", "FC 26"], ["backgammon", "تخته‌نرد"], ["open", "ثبت‌نام باز"]];
+  const filters = [
+    { value: "all", label: "همه" },
+    ...gameFilters,
+    { value: "open", label: "ثبت‌نام باز" }
+  ];
 
   return (
     <>
       <div className="mt-8 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap gap-2">
-          {filters.map(([value, label]) => (
+          {filters.map(({ value, label }) => (
             <Button
               key={value}
               type="button"

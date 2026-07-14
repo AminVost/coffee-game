@@ -3,8 +3,6 @@ import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { hasPermission } from "@/lib/auth";
 import { queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
-import { liveMatches } from "@/data/mock-data";
 
 type MatchRow = RowDataPacket & {
   id: number;
@@ -22,10 +20,6 @@ type MatchRow = RowDataPacket & {
 export async function GET() {
   const auth = await authorize("results.submit");
   if (auth.response) return auth.response;
-
-  if (env.dataMode === "mock") {
-    return NextResponse.json({ items: liveMatches.map((item) => ({ ...item, refereeUserId: null })) });
-  }
 
   const canManageAll = hasPermission(auth.user, "matches.manage");
   const params: Array<string | number> = [];

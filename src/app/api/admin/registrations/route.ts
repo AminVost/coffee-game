@@ -2,8 +2,6 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
-import { recentRegistrations } from "@/data/mock-data";
 
 type RegistrationRow = RowDataPacket & {
   id: number;
@@ -20,22 +18,6 @@ type RegistrationRow = RowDataPacket & {
 export async function GET() {
   const auth = await authorize("checkin.manage");
   if (auth.response) return auth.response;
-
-  if (env.dataMode === "mock") {
-    return NextResponse.json({
-      items: recentRegistrations.map((item, index) => ({
-        id: `mock-${index}`,
-        publicId: `mock-${index}`,
-        tournamentTitle: item.tournament,
-        status: index % 2 === 0 ? "CHECKED_IN" : "CONFIRMED",
-        slots: 1,
-        names: item.name,
-        mobiles: `0912000${String(index).padStart(4, "0")}`,
-        checkedInAt: index % 2 === 0 ? new Date().toISOString() : null,
-        createdAt: new Date().toISOString()
-      }))
-    });
-  }
 
   const rows = await queryRows<RegistrationRow[]>(`
     SELECT r.id,r.public_id,t.title AS tournament_title,r.status,r.slots,r.checked_in_at,r.created_at,

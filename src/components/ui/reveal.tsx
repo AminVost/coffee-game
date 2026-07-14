@@ -1,28 +1,14 @@
-"use client";
-
-import { m } from "motion/react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export function Reveal({
   children,
-  className,
-  delay = 0,
-  distance = 22
+  className
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
   delay?: number;
   distance?: number;
 }) {
-  return (
-    <m.div
-      initial={{ opacity: 0, y: distance }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 0.18 }}
-      transition={{ delay }}
-      className={cn(className)}
-    >
-      {children}
-    </m.div>
-  );
+  return <div className={cn(className)}>{children}</div>;
 }

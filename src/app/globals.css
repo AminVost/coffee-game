@@ -277,3 +277,20 @@ textarea.field {
     scroll-behavior: auto !important;
   }
 }
+
+
+/*
+ * Performance mode: visual animations and transitions are intentionally disabled.
+ * Application behavior and data flow are unchanged.
+ */
+html {
+  scroll-behavior: auto !important;
+}
+
+*,
+*::before,
+*::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}

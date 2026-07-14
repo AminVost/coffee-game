@@ -10,6 +10,8 @@ import { listTournaments } from "@/lib/repositories/tournaments";
 import { listLiveMatches } from "@/lib/repositories/live";
 import { getPageContent } from "@/lib/repositories/content";
 
+export const dynamic = "force-dynamic";
+
 export default async function HomePage() {
   const [tournaments, liveMatches, homeContent] = await Promise.all([
     listTournaments(),

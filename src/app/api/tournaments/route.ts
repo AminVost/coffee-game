@@ -3,7 +3,6 @@ import { z } from "zod";
 import { authorize } from "@/lib/authorization";
 import { writeAuditLog } from "@/lib/audit";
 import { execute } from "@/lib/db";
-import { env } from "@/lib/env";
 import { listTournaments } from "@/lib/repositories/tournaments";
 
 export async function GET() {
@@ -42,10 +41,6 @@ export async function POST(request: Request) {
 
     if (input.participantType === "INDIVIDUAL" && input.teamSize !== 1) {
       return NextResponse.json({ message: "اندازه تیم برای مسابقه انفرادی باید ۱ باشد." }, { status: 422 });
-    }
-
-    if (env.dataMode === "mock") {
-      return NextResponse.json({ ok: true, id: "mock-new-tournament", slug: input.slug }, { status: 201 });
     }
 
     const result = await execute(`

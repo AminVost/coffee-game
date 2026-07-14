@@ -1,5 +1,4 @@
 import { execute } from "@/lib/db";
-import { env } from "@/lib/env";
 import { getRequestIp, getRequestUserAgent } from "@/lib/request-context";
 
 export async function writeAuditLog(input: {
@@ -11,8 +10,6 @@ export async function writeAuditLog(input: {
   newData?: unknown;
   request?: Request;
 }) {
-  if (env.dataMode !== "mysql") return;
-
   await execute(`
     INSERT INTO audit_logs(
       actor_user_id, action, entity_type, entity_id,

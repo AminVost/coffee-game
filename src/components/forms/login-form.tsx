@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Chrome, Eye, EyeOff, KeyRound, LockKeyhole, Mail, MessageSquareText, Phone } from "lucide-react";
+import { Eye, EyeOff, KeyRound, LockKeyhole, Mail, MessageSquareText, Phone } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,14 +11,13 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function LoginForm() {
   const router = useRouter();
-  const [identifier, setIdentifier] = useState("admin@coffeegame.local");
-  const [password, setPassword] = useState("Admin@123");
-  const [mobile, setMobile] = useState("09120000000");
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [mobile, setMobile] = useState("");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
-  const [debugCode, setDebugCode] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -50,7 +49,6 @@ export function LoginForm() {
     setSendingCode(true);
     setError("");
     setMessage("");
-    setDebugCode("");
     try {
       const response = await fetch("/api/auth/sms/request", {
         method: "POST",
@@ -61,8 +59,6 @@ export function LoginForm() {
       if (!response.ok) throw new Error(data.message || "ارسال کد انجام نشد.");
       setCodeSent(true);
       setMessage(data.message || "کد تایید ارسال شد.");
-      setDebugCode(data.debugCode || "");
-      if (data.debugCode) setCode(String(data.debugCode));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "ارسال کد انجام نشد.");
     } finally {
@@ -150,7 +146,7 @@ export function LoginForm() {
               <FieldHint>کد فقط یک بار قابل استفاده است و زمان محدودی اعتبار دارد.</FieldHint>
             </Label>
           )}
-          {message && <Alert tone="success">{message}{debugCode && <span className="mt-1 block" dir="ltr">Development code: {debugCode}</span>}</Alert>}
+          {message && <Alert tone="success">{message}</Alert>}
           {error && <Alert tone="error">{error}</Alert>}
           <Button type="submit" className="w-full" size="lg" loading={loading || sendingCode} loadingText={codeSent ? "در حال تایید..." : "در حال ارسال..."}>
             {codeSent ? "تایید و ورود" : "ارسال کد تایید"}
@@ -159,9 +155,6 @@ export function LoginForm() {
         </form>
       )}
 
-      <div className="my-6 flex items-center gap-3 text-xs text-[var(--muted)]"><span className="h-px flex-1 bg-[var(--line)]" />یا<span className="h-px flex-1 bg-[var(--line)]" /></div>
-      <Button variant="secondary" className="w-full" type="button" disabled><Chrome size={18} />ورود با Google — پس از ثبت کلیدها</Button>
-      <Alert tone="warning" className="mt-5 text-xs font-normal">در محیط Local می‌توانی با حساب مدیر نمونه وارد شوی. ورود پیامکی در حالت MySQL از OTP واقعی دیتابیس استفاده می‌کند.</Alert>
     </div>
   );
 }

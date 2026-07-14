@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { db } from "@/lib/db";
-import { env } from "@/lib/env";
 import { acquirePlayerMobileLocks, ensureUserPlayer, releasePlayerMobileLocks } from "@/lib/player-identity";
 
 const schema = z.object({
@@ -18,10 +17,6 @@ type ExistingUserRow = RowDataPacket & { id: number };
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
-    if (env.dataMode === "mock") {
-      return NextResponse.json({ ok: true, message: "ثبت‌نام آزمایشی انجام شد." }, { status: 201 });
-    }
-
     const passwordHash = await hash(input.password, 12);
     const connection = await db.getConnection();
     let locks: string[] = [];

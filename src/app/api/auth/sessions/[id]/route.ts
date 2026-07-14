@@ -3,7 +3,6 @@ import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { clearSession, currentSessionHash } from "@/lib/auth";
 import { execute, queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 type SessionRow = RowDataPacket & { token_hash: string };
 
@@ -14,10 +13,6 @@ export async function DELETE(_: Request, { params }: { params: Promise<{ id: str
 
   if (!/^\d+$/.test(id)) {
     return NextResponse.json({ message: "شناسه نشست نامعتبر است." }, { status: 422 });
-  }
-
-  if (env.dataMode === "mock") {
-    return NextResponse.json({ ok: true });
   }
 
   const rows = await queryRows<SessionRow[]>(`

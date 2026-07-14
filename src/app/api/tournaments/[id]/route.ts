@@ -4,7 +4,6 @@ import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { writeAuditLog } from "@/lib/audit";
 import { execute, queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 const patchSchema = z.object({
   title: z.string().trim().min(3).max(200).optional(),
@@ -20,8 +19,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   try {
     const { id } = await params;
     const input = patchSchema.parse(await request.json());
-
-    if (env.dataMode === "mock") return NextResponse.json({ ok: true, id, data: input });
 
     const rows = await queryRows<TournamentRow[]>(`SELECT id,title,status FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1`, [id]);
     if (!rows[0]) return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
@@ -58,16 +55,18 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   if (auth.response) return auth.response;
   const { id } = await params;
 
-  if (env.dataMode !== "mock") {
-    await execute(`UPDATE tournaments SET deleted_at=NOW(),updated_at=NOW() WHERE id=? AND deleted_at IS NULL`, [id]);
-    await writeAuditLog({
-      actorUserId: auth.user.id,
-      action: "tournament.deleted",
-      entityType: "tournament",
-      entityId: id,
-      request
-    });
-  }
+  await execute(`
+    UPDATE tournaments
+    SET deleted_at=NOW(),updated_at=NOW()
+    WHERE id=? AND deleted_at IS NULL
+  `, [id]);
+  await writeAuditLog({
+    actorUserId: auth.user.id,
+    action: "tournament.deleted",
+    entityType: "tournament",
+    entityId: id,
+    request
+  });
 
   return NextResponse.json({ ok: true });
 }

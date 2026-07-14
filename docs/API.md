@@ -1,17 +1,22 @@
 # API خلاصه
 
-| Method | Route | توضیح |
-|---|---|---|
-| GET | `/api/health` | وضعیت سرویس و حالت داده |
-| POST | `/api/auth/login` | ورود رمز |
-| POST | `/api/auth/register` | ثبت‌نام کاربر |
-| POST | `/api/auth/sms/request` | درخواست OTP Mock |
-| POST | `/api/auth/sms/verify` | ورود با OTP Mock |
-| GET/POST | `/api/tournaments` | فهرست/ساخت مسابقه |
-| PATCH/DELETE | `/api/tournaments/:id` | ویرایش/Soft Delete |
-| POST | `/api/registrations` | رزرو چندسهمی |
-| GET | `/api/live` | بازی‌های زنده |
-| GET/POST | `/api/admin/templates` | قالب‌های مسابقه |
-| POST | `/api/payments/receipts` | آپلود فیش |
+## احراز هویت
 
-Routeهای مدیریت Session مدیر را بررسی می‌کنند. Queryهای MySQL پارامتری هستند.
+| Method | Route | کاربرد |
+|---|---|---|
+| POST | `/api/auth/sms/request` | ایجاد/به‌روزرسانی کاربر PENDING و تولید OTP پویا |
+| POST | `/api/auth/sms/verify` | تأیید OTP، فعال‌سازی حساب، اتصال داده‌های مهمان و ایجاد Session |
+| POST | `/api/auth/login` | ورود با رمز |
+| POST | `/api/auth/register` | ساخت حساب با رمز |
+
+OTP هیچ‌گاه در پاسخ مرورگر ارسال نمی‌شود. ارائه‌دهنده `database` فقط برای Local است و در Production ممنوع است.
+
+## ثبت‌نام و پرداخت
+
+- `/api/registration-holds`
+- `/api/registrations`
+- `/api/account/payments`
+- `/api/admin/payments`
+- `/api/registration-track/[token]`
+
+همه Routeها از MySQL استفاده می‌کنند و Routeهای خصوصی مالکیت یا Permission را کنترل می‌کنند.

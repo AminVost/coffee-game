@@ -61,10 +61,10 @@ export function SettingsManager() {
         <h2 className="flex items-center gap-2 font-black"><ShieldCheck className="text-[var(--brand)]" />امنیت و سرویس‌ها</h2>
         <div className="mt-5 grid gap-4">
           <Label>ورود دومرحله‌ای مدیر<SelectField value={settings.auth.admin2fa} onValueChange={(value) => setSettings({ ...settings, auth: { admin2fa: value as Settings["auth"]["admin2fa"] } })} options={[{ value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>
-          <ToggleRow label="پرداخت حضوری" checked={settings.payment.cash} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, cash: checked } })} />
-          <ToggleRow label="آپلود فیش" checked={settings.payment.receipt} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, receipt: checked } })} />
+          <ToggleRow label="پرداخت حضوری (کارتخوان یا نقدی)" checked={settings.payment.cash} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, cash: checked } })} />
+          <ToggleRow label="انتقال بانکی و رسید اختیاری" checked={settings.payment.receipt} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, receipt: checked } })} />
           <ToggleRow label="اعلان داخل برنامه" checked={settings.notification.inApp} onCheckedChange={(checked) => setSettings({ ...settings, notification: { ...settings.notification, inApp: checked } })} />
-          <Alert tone="warning" className="text-xs font-normal">کلیدهای SMS.ir و درگاه پرداخت فقط از فایل env سرور خوانده می‌شوند و در دیتابیس ذخیره نمی‌شوند.</Alert>
+          <Alert tone="warning" className="text-xs font-normal">کلیدهای SMS.ir فقط از فایل env سرور خوانده می‌شوند. فعال‌بودن اعلان داخل برنامه و روش‌های پرداخت از این بخش مدیریت می‌شود.</Alert>
         </div>
       </Card>
     </div>

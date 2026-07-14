@@ -1,33 +1,12 @@
-# معماری پروژه
+# معماری
 
-## لایه‌ها
+- Next.js App Router
+- React و TypeScript
+- MySQL با `mysql2`
+- Session قابل ابطال در جدول `sessions`
+- کنترل دسترسی Role/Permission
+- OTP پویا با Hash و محدودیت تلاش
+- پرداخت دستی و بررسی مدیر
+- فایل رسید خارج از `public`
 
-- **Presentation:** صفحات App Router و کامپوننت‌های React
-- **API:** Route Handlerهای Next.js
-- **Domain:** مسابقه، ثبت‌نام، پرداخت، نتیجه، رنکینگ و قالب
-- **Data:** Repository و `mysql2` با Query پارامتری
-- **Mock:** داده‌های مستقل برای تست UI بدون دیتابیس
-
-## انتخاب حالت داده
-
-```env
-DATA_MODE=mock
-```
-
-یا:
-
-```env
-DATA_MODE=mysql
-```
-
-## توسعه‌پذیری بازی‌ها
-
-جدول `games` دارای `settings_schema` و `result_schema` است. تنظیمات هر مسابقه در ستون‌های JSON ذخیره می‌شوند؛ در نتیجه افزودن بازی جدید نیازمند تغییر موتور عمومی جدول، ثبت‌نام و پرداخت نیست.
-
-## قالب مسابقه
-
-`Tournament Template` تنظیمات قابل استفاده مجدد را نگه می‌دارد. هنگام ساخت مسابقه، تنظیمات قالب باید Copy شوند تا ویرایش بعدی قالب مسابقات قبلی را تغییر ندهد.
-
-## Realtime
-
-endpoint فعلی `/api/live` داده تازه و `no-store` برمی‌گرداند. برای Production، Socket.IO یا SSE می‌تواند پشت همین مدل داده اضافه شود بدون تغییر UI اصلی.
+Runtime فقط از MySQL استفاده می‌کند. داده Mock یا انتخاب `DATA_MODE` وجود ندارد.

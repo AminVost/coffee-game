@@ -1,4 +1,4 @@
-export type GameSlug = "fc26" | "backgammon";
+export type GameSlug = string;
 
 export type TournamentStatus =
   | "ثبت‌نام باز"

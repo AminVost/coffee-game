@@ -5,7 +5,6 @@ import { authorize } from "@/lib/authorization";
 import { hasPermission } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
 import { db, queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 const schema = z.object({
   homeScore: z.number().int().min(0).max(999),
@@ -29,8 +28,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   try {
     const input = schema.parse(await request.json());
     const { id } = await params;
-
-    if (env.dataMode === "mock") return NextResponse.json({ ok: true, ...input });
 
     const rows = await queryRows<MatchRow[]>(`
       SELECT id,status,home_score,away_score,referee_user_id

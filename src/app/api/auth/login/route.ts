@@ -4,7 +4,6 @@ import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { loadUserAccess, setSession } from "@/lib/auth";
 import { queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 const schema = z.object({
   email: z.string().min(3),
@@ -20,20 +19,6 @@ type UserRow = RowDataPacket & {
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
-
-    if (env.dataMode === "mock") {
-      const admin = input.email === "admin@coffeegame.local" && input.password === "Admin@123";
-      const player = input.email === "player@coffeegame.local" && input.password === "Player@123";
-
-      if (!admin && !player) {
-        return NextResponse.json({ message: "اطلاعات ورود آزمایشی نادرست است." }, { status: 401 });
-      }
-
-      const user = await loadUserAccess(admin ? "1" : "2");
-      if (!user) return NextResponse.json({ message: "کاربر آزمایشی یافت نشد." }, { status: 404 });
-      await setSession(user, request);
-      return NextResponse.json({ ok: true, role: user.role });
-    }
 
     const rows = await queryRows<UserRow[]>(`
       SELECT id, password_hash, status

@@ -5,7 +5,6 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { writeAuditLog } from "@/lib/audit";
 import { db, queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 import { acquirePlayerMobileLocks, ensureUserPlayer, releasePlayerMobileLocks } from "@/lib/player-identity";
 
 const schema = z.object({ title: z.string().trim().min(2).max(140) });
@@ -23,10 +22,6 @@ type TeamRow = RowDataPacket & {
 export async function GET() {
   const auth = await authorize();
   if (auth.response) return auth.response;
-
-  if (env.dataMode === "mock") {
-    return NextResponse.json({ items: [{ id: "mock-team", publicId: "TURBO-26", title: "تیم توربو", memberCount: 2, isCaptain: true }] });
-  }
 
   const rows = await queryRows<TeamRow[]>(`
     SELECT t.id,t.public_id,t.title,t.avatar_url,
@@ -59,8 +54,6 @@ export async function POST(request: Request) {
 
   try {
     const input = schema.parse(await request.json());
-    if (env.dataMode === "mock") return NextResponse.json({ ok: true, item: { id: `mock-${Date.now()}`, publicId: randomUUID(), title: input.title, memberCount: 1, isCaptain: true } }, { status: 201 });
-
     const publicId = randomUUID();
     const connection = await db.getConnection();
     let locks: string[] = [];

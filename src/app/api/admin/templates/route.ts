@@ -4,7 +4,6 @@ import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { writeAuditLog } from "@/lib/audit";
 import { execute, queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 const schema = z.object({
   title: z.string().trim().min(3).max(160),
@@ -16,13 +15,6 @@ const schema = z.object({
 export async function GET() {
   const auth = await authorize("tournaments.view");
   if (auth.response) return auth.response;
-
-  if (env.dataMode === "mock") {
-    return NextResponse.json({ items: [
-      { id: "1", game_id: 1, game_title: "FC 26 روی PS5", title: "جام هفتگی FC 26", configuration: { format: "حذفی تک‌بازی", capacity: 32 } },
-      { id: "2", game_id: 2, game_title: "تخته‌نرد", title: "تخته‌نرد هفت‌امتیازی", configuration: { format: "گروهی و سپس حذفی", capacity: 40 } }
-    ] });
-  }
 
   const rows = await queryRows<RowDataPacket[]>(`
     SELECT tt.*,g.title AS game_title
@@ -40,8 +32,6 @@ export async function POST(request: Request) {
 
   try {
     const input = schema.parse(await request.json());
-    if (env.dataMode === "mock") return NextResponse.json({ ok: true, id: "mock-template" }, { status: 201 });
-
     const result = await execute(`
       INSERT INTO tournament_templates(game_id,title,description,configuration,is_active,created_by,created_at,updated_at)
       VALUES(?,?,?,?,1,?,NOW(),NOW())

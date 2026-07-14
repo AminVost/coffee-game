@@ -1,24 +1,28 @@
 import type { Metadata } from "next";
 import { RankingsSection } from "@/components/rankings/rankings-section";
-import { backgammonRankings, fcRankings } from "@/data/mock-data";
-import { env } from "@/lib/env";
-import { getRankingRows } from "@/lib/repositories/rankings";
+import { getRankingRows, listRankingGames } from "@/lib/repositories/rankings";
 
 export const metadata: Metadata = { title: "رنکینگ بازیکنان" };
+export const dynamic = "force-dynamic";
 
 export default async function RankingsPage() {
-  const [fcRows, backgammonRows] = env.dataMode === "mysql"
-    ? await Promise.all([
-        getRankingRows("fc26", "all_time"),
-        getRankingRows("backgammon", "all_time")
-      ])
-    : [fcRankings, backgammonRankings];
+  const games = await listRankingGames();
+  const sections = await Promise.all(games.map(async (game) => ({
+    ...game,
+    rows: await getRankingRows(game.slug, "all_time")
+  })));
 
   return <div className="page-shell">
     <p className="section-kicker">PLAYER RANKING</p>
     <h1 className="section-title mt-2">رنکینگ بازیکنان</h1>
-    <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">امتیازهای FC 26 و تخته‌نرد کاملاً مستقل محاسبه می‌شوند. بازه ماهانه، فصلی، سالانه و تمام دوران مستقیماً از داده‌های ثبت‌شده خوانده می‌شود.</p>
-    <RankingsSection game="fc26" title="FC 26" initialRows={fcRows}/>
-    <RankingsSection game="backgammon" title="تخته‌نرد" initialRows={backgammonRows}/>
+    <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">
+      رنکینگ هر بازی و هر بازه مستقیماً از نتایج ثبت‌شده در دیتابیس محاسبه و نمایش داده می‌شود.
+    </p>
+    {sections.map((game) => (
+      <RankingsSection key={game.slug} game={game.slug} title={game.title} initialRows={game.rows} />
+    ))}
+    {!sections.length && <div className="mt-8 rounded-[1.75rem] border border-dashed border-[var(--line)] p-8 text-center text-sm text-[var(--muted)]">
+      هنوز رنکینگ فعالی برای هیچ بازی ثبت نشده است.
+    </div>}
   </div>;
 }

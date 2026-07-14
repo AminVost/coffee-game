@@ -3,7 +3,6 @@ import type { RowDataPacket } from "mysql2";
 import { z } from "zod";
 import { authorize } from "@/lib/authorization";
 import { queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 const querySchema = z.object({
   search: z.string().trim().max(120).default(""),
@@ -44,12 +43,6 @@ type PlayerRow = RowDataPacket & {
   last_registration_at: Date | null;
 };
 
-const mockPlayers = [
-  { id: "1", name: "بازیکن آزمایشی", mobile: "09120000002", email: "player@coffeegame.local", isGuest: false, accountStatus: "ACTIVE", registrationCount: 2, tournamentCount: 2, teamCount: 1, totalPoints: 0, rankingPlayed: 0, rankingWins: 0, lastTournamentTitle: "شب دونفره FC 26" },
-  { id: "2", name: "امیرحسین رضایی", mobile: "09121111111", email: null, isGuest: true, accountStatus: "GUEST", registrationCount: 2, tournamentCount: 2, teamCount: 1, totalPoints: 1260, rankingPlayed: 18, rankingWins: 14, lastTournamentTitle: "شب دونفره FC 26" },
-  { id: "3", name: "مهدی کریمی", mobile: "09122222222", email: null, isGuest: true, accountStatus: "GUEST", registrationCount: 0, tournamentCount: 0, teamCount: 1, totalPoints: 1215, rankingPlayed: 21, rankingWins: 15, lastTournamentTitle: null }
-];
-
 export async function GET(request: Request) {
   const auth = await authorize("players.view");
   if (auth.response) return auth.response;
@@ -57,41 +50,6 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const input = querySchema.parse(Object.fromEntries(url.searchParams.entries()));
-
-    if (env.dataMode === "mock") {
-      const needle = input.search.toLowerCase();
-      const filtered = mockPlayers.filter((player) => {
-        const matchesSearch = !needle || `${player.name} ${player.mobile} ${player.email || ""}`.toLowerCase().includes(needle);
-        const matchesType = input.type === "all" || (input.type === "guest" ? player.isGuest : !player.isGuest);
-        const matchesStatus = input.status === "all" || player.accountStatus === input.status;
-        return matchesSearch && matchesType && matchesStatus;
-      });
-      const start = (input.page - 1) * input.pageSize;
-      return NextResponse.json({
-        items: filtered.slice(start, start + input.pageSize).map((item) => ({
-          ...item,
-          userId: item.isGuest ? null : item.id,
-          avatarUrl: null,
-          mobileVerified: !item.isGuest,
-          emailVerified: !item.isGuest,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          lastRegistrationAt: item.lastTournamentTitle ? new Date().toISOString() : null
-        })),
-        overview: {
-          total: mockPlayers.length,
-          members: mockPlayers.filter((item) => !item.isGuest).length,
-          guests: mockPlayers.filter((item) => item.isGuest).length,
-          activeAccounts: mockPlayers.filter((item) => item.accountStatus === "ACTIVE").length
-        },
-        pagination: {
-          page: input.page,
-          pageSize: input.pageSize,
-          total: filtered.length,
-          totalPages: Math.max(1, Math.ceil(filtered.length / input.pageSize))
-        }
-      });
-    }
 
     const where: string[] = ["1=1"];
     const params: Array<string | number> = [];

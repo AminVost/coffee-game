@@ -7,7 +7,7 @@ import { useState } from "react";
 import { Logo } from "@/components/layout/logo";
 import { LogoutButton } from "@/components/layout/logout-button";
 import { Button } from "@/components/ui/button";
-import { adminNavigation } from "@/data/mock-data";
+import { adminNavigation } from "@/config/admin-navigation";
 import { cn } from "@/lib/utils";
 
 const iconMap = { LayoutDashboard, Trophy, CopyPlus, Contact, Users, Swords, WalletCards, Images, Settings };
@@ -29,7 +29,13 @@ function canAccess(permissions: string[], href: string) {
   return !requiredPermission || permissions.includes("*") || permissions.includes(requiredPermission);
 }
 
-export function AdminSidebar({ permissions, dataMode }: { permissions: string[]; dataMode: "mock" | "mysql" }) {
+export function AdminSidebar({
+  permissions,
+  pendingPaymentCount
+}: {
+  permissions: string[];
+  pendingPaymentCount: number;
+}) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const visibleNavigation = adminNavigation.filter((item) => canAccess(permissions, item.href));
@@ -63,14 +69,22 @@ export function AdminSidebar({ permissions, dataMode }: { permissions: string[];
                 )}
               >
                 <Icon size={19} />
-                {item.label}
+                <span className="flex-1">{item.label}</span>
+                {item.href === "/admin/payments" && pendingPaymentCount > 0 && (
+                  <span className={cn(
+                    "grid min-w-6 place-items-center rounded-full px-1.5 py-0.5 text-[10px] font-black",
+                    active ? "bg-white/20 text-white" : "bg-amber-500/15 text-amber-600"
+                  )}>
+                    {pendingPaymentCount > 99 ? "99+" : pendingPaymentCount.toLocaleString("fa-IR")}
+                  </span>
+                )}
               </Link>
             );
           })}
         </nav>
         <div className="mt-auto rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4">
-          <p className="text-xs text-[var(--muted)]">حالت داده</p>
-          <strong className={cn("mt-1 block text-sm", dataMode === "mysql" ? "text-emerald-500" : "text-amber-500")}>{dataMode === "mysql" ? "MySQL متصل" : "Mock محلی"}</strong>
+          <p className="text-xs text-[var(--muted)]">منبع داده</p>
+          <strong className="mt-1 block text-sm text-emerald-500">MySQL فعال</strong>
           <div className="mt-3"><LogoutButton compact /></div>
         </div>
       </aside>

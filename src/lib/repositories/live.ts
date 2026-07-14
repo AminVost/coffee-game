@@ -1,7 +1,5 @@
 import type { RowDataPacket } from "mysql2";
-import { liveMatches as mockLiveMatches } from "@/data/mock-data";
 import { queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 import type { LiveMatch } from "@/types";
 
 type LiveMatchRow = RowDataPacket & {
@@ -31,8 +29,6 @@ function mapStartsAt(row: LiveMatchRow) {
 }
 
 export async function listLiveMatches(): Promise<LiveMatch[]> {
-  if (env.dataMode === "mock") return mockLiveMatches;
-
   const rows = await queryRows<LiveMatchRow[]>(`
     SELECT m.id,t.title AS tournament_title,tr.title AS round_title,
            res.title AS resource_title,m.status,m.home_score,m.away_score,m.scheduled_at,

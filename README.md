@@ -1,133 +1,92 @@
 # Coffee Game Satarkhan
 
-وب‌اپلیکیشن فارسی و RTL برای رزرو و مدیریت مسابقات FC 26 و تخته‌نرد، با طراحی Mobile First، پنل مدیریت، پنل بازیکن، حالت Dark/Light، PWA و دیتابیس MySQL قابل Import در phpMyAdmin.
+سامانه مدیریت مسابقات، ثبت‌نام، رزرو موقت ظرفیت، پرداخت دستی، پیگیری عمومی، قرعه، مسابقات زنده و رنکینگ.
 
-## امکانات موجود در این نسخه
+## وضعیت داده
 
-- صفحه اصلی مدرن و Responsive
-- فهرست و جزئیات مسابقات
-- ثبت‌نام چندسهمی و ثبت مهمان
-- مسابقات انفرادی و تیمی
-- نمایش نتایج و برنامه زنده
-- رنکینگ مستقل FC 26 و تخته‌نرد
-- پنل بازیکن، تیم‌ها، پرداخت‌ها و اعلان‌ها
-- پنل مدیریت مسابقات، شرکت‌کنندگان، نتایج، پرداخت‌ها و محتوا
-- Wizard ساخت مسابقه
-- قالب‌های ذخیره‌شده مسابقه
-- ورود با رمز و SMS Mock
-- ساختار آماده Google Login، SMS.ir و زرین‌پال در `.env`
-- آپلود امن اولیه فیش JPG/PNG/PDF تا ۵ مگابایت
-- MySQL با نقش‌ها، Permission، Audit Log، Soft Delete و داده‌های اولیه
-- PWA و Service Worker برای نسخه Production
+تمام جریان‌های عملیاتی برنامه به MySQL متصل هستند. حالت داده Mock در Runtime وجود ندارد. اطلاعات مسابقات، کاربران، پرداخت‌ها، ثبت‌نام‌ها، صفحات محتوا، اخبار، گالری، رنکینگ، قرعه و داشبوردها از دیتابیس خوانده می‌شوند.
 
-## حساب‌های آزمایشی
-
-| نوع | نام کاربری | رمز |
-|---|---|---|
-| مدیر | `admin@coffeegame.local` | `Admin@123` |
-| بازیکن | `player@coffeegame.local` | `Player@123` |
-| ورود SMS Mock | هر موبایل معتبر | `123456` |
-
-## اجرای سریع بدون دیتابیس
-
-پیش‌نیاز: Node.js 20.9 یا جدیدتر.
+## نصب
 
 ```powershell
-cd coffee-game-satarkhan
 npm install
+Copy-Item .env.example .env
 npm run dev
 ```
 
-سپس باز کنید:
-
-```text
-http://localhost:3000
-```
-
-پروژه به‌صورت پیش‌فرض با `DATA_MODE=mock` اجرا می‌شود و MySQL لازم ندارد.
-
-## اتصال به MySQL در WampServer
-
-1. WampServer را اجرا و مطمئن شوید آیکون سبز است.
-2. phpMyAdmin را باز کنید.
-3. از تب Import فایل زیر را وارد کنید:
+دیتابیس نصب تازه:
 
 ```text
 database/coffee_game_satarkhan.sql
 ```
 
-نسخه فشرده نیز آماده است:
+برای دیتابیس فعلی، Migration جدید را فقط یک بار Import کنید:
 
 ```text
-database/coffee_game_satarkhan.sql.gz
+database/migrations/20260714_production_otp_dynamic_cleanup.sql
 ```
 
-4. فایل `.env` را ویرایش کنید:
+## ورود پیامکی قبل از دریافت حساب SMS.ir
+
+در محیط Local این تنظیمات قابل استفاده‌اند:
 
 ```env
-DATA_MODE=mysql
-DATABASE_URL="mysql://root:@127.0.0.1:3306/coffee_game_satarkhan"
+SMS_PROVIDER=database
+ALLOW_DATABASE_OTP=true
 ```
 
-5. سرور Dev را Restart کنید:
+در این حالت:
 
-```powershell
-Ctrl + C
-npm run dev
+- با درخواست OTP، کاربر فوراً در جدول `users` با وضعیت `PENDING` ساخته می‌شود.
+- هش کد در `users.two_step_code_hash` و `otp_codes.code_hash` ذخیره می‌شود.
+- کد موقت فقط برای توسعه در `users.two_step_development_code` ثبت می‌شود.
+- کد در پاسخ API یا رابط کاربری نمایش داده نمی‌شود.
+- پس از تأیید یا انقضا، کد قابل‌خواندن پاک می‌شود.
+
+برای دیدن کد در محیط Local:
+
+```sql
+SELECT id,name,mobile,status,two_step_development_code,two_step_expires_at
+FROM users
+WHERE mobile='09123456789'
+LIMIT 1;
 ```
 
-## دستورهای مهم
-
-```powershell
-npm run dev      # اجرای توسعه
-npm run build    # تست Build
-npm run start    # اجرای Build تولیدی
-npm run lint     # بررسی کد
-```
-
-## مسیرهای مهم
-
-```text
-/                       صفحه اصلی
-/tournaments            مسابقات
-/live                   نمایش زنده
-/rankings               رنکینگ‌ها
-/login                  ورود
-/account                پنل بازیکن
-/admin                  پنل مدیریت
-/admin/tournaments/new  ساخت مسابقه
-/admin/templates        قالب‌های مسابقه
-/api/health             بررسی سلامت API
-```
-
-## تنظیم سرویس‌های واقعی
-
-این نسخه برای جلوگیری از هزینه و وابستگی، با سرویس‌های Mock اجرا می‌شود. برای Production باید کلیدهای واقعی در `.env` قرار گیرند و Adapterهای مربوط فعال شوند:
+این روش در `NODE_ENV=production` غیرفعال است. برای Production:
 
 ```env
 SMS_PROVIDER=smsir
-SMSIR_API_KEY="..."
-PAYMENT_PROVIDER=zarinpal
-ZARINPAL_MERCHANT_ID="..."
-GOOGLE_CLIENT_ID="..."
-GOOGLE_CLIENT_SECRET="..."
+ALLOW_DATABASE_OTP=false
+SMSIR_API_KEY=...
+SMSIR_TEMPLATE_ID=...
 ```
 
-کلیدها نباید داخل Git یا کد Frontend قرار بگیرند.
+## الزامات Production
 
-## ساختار پروژه
-
-```text
-src/app/                  صفحات و Route Handlerها
-src/components/           کامپوننت‌های UI، عمومی و مدیریت
-src/data/                 داده‌های Mock
-src/lib/                  Session، MySQL و Repositoryها
-database/                 فایل‌های SQL قابل Import
-public/brand/             لوگو و Assetهای برند
-docs/                     مستندات فنی و تست
-storage/receipts/         فیش‌های محلی؛ در Git ذخیره نمی‌شوند
+```env
+DATABASE_URL=mysql://USER:PASSWORD@HOST:3306/coffee_game_satarkhan
+AUTH_SECRET=RANDOM_SECRET_WITH_AT_LEAST_32_CHARACTERS
+NEXT_PUBLIC_APP_URL=https://example.com
+SMS_PROVIDER=smsir
+ALLOW_DATABASE_OTP=false
 ```
 
-## نکته امنیتی
+برنامه در Production بدون `AUTH_SECRET` معتبر، Session ایجاد یا بررسی نمی‌کند. ورود OTP دیتابیسی نیز در Production پذیرفته نمی‌شود.
 
-حساب‌ها و رمزهای نمونه فقط برای محیط Local هستند. پیش از انتشار عمومی، رمزها، `AUTH_SECRET`، تنظیمات CORS/Proxy، HTTPS، محدودیت درخواست‌ها، اسکن فایل و سرویس‌های واقعی باید تنظیم و تست شوند.
+## جریان ثبت‌نام و پرداخت
+
+1. اطلاعات شرکت‌کنندگان داخل صفحه مسابقه دریافت می‌شود.
+2. کاربر ناشناس همان‌جا با OTP وارد می‌شود.
+3. ظرفیت به مدت ۱۵ دقیقه Hold می‌شود.
+4. اطلاعات انتقال بانکی، کارتخوان یا نقدی ثبت می‌شود.
+5. پرداخت در صندوق مدیریت بررسی می‌شود.
+6. مدیر می‌تواند پرداخت `PENDING` یا `NEEDS_CORRECTION` را تأیید، نیازمند اصلاح یا رد نهایی کند.
+7. کاربر از حساب یا لینک عمومی امن، وضعیت ثبت‌نام را پیگیری می‌کند.
+
+## بررسی‌ها
+
+```powershell
+npm run lint
+npx tsc --noEmit
+npm run build
+```

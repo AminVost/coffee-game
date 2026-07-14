@@ -64,10 +64,10 @@ const initialForm: FormState = {
   hasThirdPlace: false,
   drawMode: "random",
   rulesText: "",
-  status: "REGISTRATION_OPEN"
+  status: "DRAFT"
 };
 
-export function TournamentBuilder() {
+export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: number }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(initialForm);
   const [games, setGames] = useState<Option[]>([]);
@@ -83,11 +83,56 @@ export function TournamentBuilder() {
       fetch("/api/admin/tournament-options", { cache: "no-store" }).then((response) => response.json()),
       fetch("/api/admin/templates", { cache: "no-store" }).then((response) => response.json())
     ]).then(([options, templatePayload]) => {
-      setGames(options.games || []);
-      setVenues(options.venues || []);
-      setTemplates(templatePayload.items || []);
+      const loadedGames = options.games || [];
+      const loadedVenues = options.venues || [];
+      const loadedTemplates: TemplateItem[] = templatePayload.items || [];
+      setGames(loadedGames);
+      setVenues(loadedVenues);
+      setTemplates(loadedTemplates);
+
+      setForm((current) => {
+        const base = {
+          ...current,
+          gameId: loadedGames.some((game: Option) => game.id === current.gameId)
+            ? current.gameId
+            : Number(loadedGames[0]?.id || current.gameId),
+          venueId: loadedVenues.some((venue: Option) => venue.id === current.venueId)
+            ? current.venueId
+            : loadedVenues[0]?.id || null
+        };
+        const selected = initialTemplateId
+          ? loadedTemplates.find((item) => Number(item.id) === initialTemplateId)
+          : null;
+        if (!selected) return base;
+        const config = (typeof selected.configuration === "string"
+          ? JSON.parse(selected.configuration)
+          : selected.configuration) as Record<string, unknown>;
+        return {
+          ...base,
+          templateId: Number(selected.id),
+          gameId: Number(selected.game_id),
+          format: String(config.format || base.format),
+          capacity: Number(config.capacity || base.capacity),
+          price: Number(config.price ?? base.price),
+          reservationExpiresMin: Number(config.reservationExpiresMin ?? base.reservationExpiresMin),
+          teamSize: Number(config.teamSize || base.teamSize),
+          participantType: config.participantType === "TEAM" ? "TEAM" : "INDIVIDUAL",
+          lateToleranceMin: Number(config.lateToleranceMin ?? base.lateToleranceMin),
+          waitlistMode: ["offer","manual","automatic"].includes(String(config.waitlistMode))
+            ? String(config.waitlistMode) as FormState["waitlistMode"]
+            : base.waitlistMode,
+          allowMultiSlot: typeof config.allowMultiSlot === "boolean" ? config.allowMultiSlot : base.allowMultiSlot,
+          hasThirdPlace: typeof config.hasThirdPlace === "boolean" ? config.hasThirdPlace : base.hasThirdPlace,
+          drawMode: ["random","seeded","custom"].includes(String(config.drawMode))
+            ? String(config.drawMode) as FormState["drawMode"]
+            : base.drawMode,
+          rulesText: Array.isArray(config.rules)
+            ? config.rules.filter((item: unknown): item is string => typeof item === "string").join("\n")
+            : base.rulesText
+        };
+      });
     }).catch(() => setError("دریافت تنظیمات اولیه انجام نشد."));
-  }, []);
+  }, [initialTemplateId]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -100,7 +145,9 @@ export function TournamentBuilder() {
     }
     const selected = templates.find((item) => String(item.id) === value);
     if (!selected) return;
-    const config = typeof selected.configuration === "string" ? JSON.parse(selected.configuration) : selected.configuration;
+    const config = (typeof selected.configuration === "string"
+      ? JSON.parse(selected.configuration)
+      : selected.configuration) as Record<string, unknown>;
     setForm((current) => ({
       ...current,
       templateId: Number(selected.id),
@@ -225,7 +272,7 @@ export function TournamentBuilder() {
       {step === 2 && <div className="grid gap-5 sm:grid-cols-2">
         <Label>هزینه هر سهم (تومان)<Input type="number" min="0" value={form.price} onChange={(event) => update("price", Number(event.target.value))} /></Label>
         <Label>مهلت رزرو بدون پرداخت (دقیقه)<Input type="number" min="5" value={form.reservationExpiresMin} onChange={(event) => update("reservationExpiresMin", Number(event.target.value))} /></Label>
-        <Alert tone="info" className="sm:col-span-2">روش‌های پرداخت فعال پروژه شامل درگاه Mock، پرداخت حضوری و فیش بانکی است. تنظیم سرویس واقعی از فایل env انجام می‌شود.</Alert>
+        <Alert tone="info" className="sm:col-span-2">روش‌های پرداخت ثبت‌نام شامل کارت‌به‌کارت با اطلاعات قابل تطبیق، کارتخوان حضوری و پرداخت نقدی است. تصویر رسید در انتقال بانکی اختیاری است.</Alert>
       </div>}
 
       {step === 3 && <div className="grid gap-5 sm:grid-cols-2">

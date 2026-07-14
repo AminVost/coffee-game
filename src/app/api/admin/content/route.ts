@@ -4,7 +4,6 @@ import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { writeAuditLog } from "@/lib/audit";
 import { execute, queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 const allowedSlugs = ["home", "rules", "about", "contact"] as const;
 const querySchema = z.enum(allowedSlugs);
@@ -26,21 +25,12 @@ type ContentRow = RowDataPacket & {
   is_published: number;
 };
 
-const mockContents: Record<string, Omit<z.infer<typeof saveSchema>, "slug">> = {
-  home: { title: "صفحه اصلی", body: "محتوای صفحه اصلی Coffee Game ستارخان", seoTitle: "Coffee Game ستارخان", seoDescription: "رزرو مسابقات", isPublished: true },
-  rules: { title: "قوانین", body: "قوانین عمومی ثبت‌نام، پرداخت، حضور و ثبت نتیجه.", seoTitle: "قوانین مسابقات", seoDescription: "قوانین مجموعه", isPublished: true },
-  about: { title: "درباره ما", body: "Coffee Game ستارخان، فضای بازی و رقابت.", seoTitle: "درباره ما", seoDescription: "معرفی مجموعه", isPublished: true },
-  contact: { title: "تماس با ما", body: "تهران، ستارخان", seoTitle: "تماس با ما", seoDescription: "راه‌های ارتباطی", isPublished: true }
-};
-
 export async function GET(request: Request) {
   const auth = await authorize("content.manage");
   if (auth.response) return auth.response;
 
   try {
     const slug = querySchema.parse(new URL(request.url).searchParams.get("slug"));
-    if (env.dataMode === "mock") return NextResponse.json({ item: { slug, ...mockContents[slug] } });
-
     const rows = await queryRows<ContentRow[]>(`
       SELECT slug,title,body,seo_title,seo_description,is_published
       FROM page_contents WHERE slug=? LIMIT 1
@@ -48,16 +38,20 @@ export async function GET(request: Request) {
     const item = rows[0];
     if (!item) return NextResponse.json({ message: "محتوای صفحه یافت نشد." }, { status: 404 });
 
-    return NextResponse.json({ item: {
-      slug: item.slug,
-      title: item.title,
-      body: item.body,
-      seoTitle: item.seo_title || "",
-      seoDescription: item.seo_description || "",
-      isPublished: Boolean(item.is_published)
-    } });
+    return NextResponse.json({
+      item: {
+        slug: item.slug,
+        title: item.title,
+        body: item.body,
+        seoTitle: item.seo_title || "",
+        seoDescription: item.seo_description || "",
+        isPublished: Boolean(item.is_published)
+      }
+    });
   } catch (error) {
-    if (error instanceof z.ZodError) return NextResponse.json({ message: "صفحه انتخاب‌شده معتبر نیست." }, { status: 422 });
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ message: "صفحه انتخاب‌شده معتبر نیست." }, { status: 422 });
+    }
     return NextResponse.json({ message: "دریافت محتوا انجام نشد." }, { status: 500 });
   }
 }
@@ -68,28 +62,36 @@ export async function PUT(request: Request) {
 
   try {
     const input = saveSchema.parse(await request.json());
-    if (env.dataMode !== "mock") {
-      const oldRows = await queryRows<ContentRow[]>(`SELECT * FROM page_contents WHERE slug=? LIMIT 1`, [input.slug]);
-      await execute(`
-        INSERT INTO page_contents(slug,title,body,seo_title,seo_description,is_published,updated_at)
-        VALUES(?,?,?,?,?,?,NOW())
-        ON DUPLICATE KEY UPDATE title=VALUES(title),body=VALUES(body),
-          seo_title=VALUES(seo_title),seo_description=VALUES(seo_description),
-          is_published=VALUES(is_published),updated_at=NOW()
-      `, [input.slug, input.title, input.body, input.seoTitle || null, input.seoDescription || null, input.isPublished ? 1 : 0]);
-      await writeAuditLog({
-        actorUserId: auth.user.id,
-        action: "content.updated",
-        entityType: "page_content",
-        entityId: input.slug,
-        oldData: oldRows[0] || null,
-        newData: input,
-        request
-      });
-    }
+    const oldRows = await queryRows<ContentRow[]>(`SELECT * FROM page_contents WHERE slug=? LIMIT 1`, [input.slug]);
+    await execute(`
+      INSERT INTO page_contents(slug,title,body,seo_title,seo_description,is_published,updated_at)
+      VALUES(?,?,?,?,?,?,NOW())
+      ON DUPLICATE KEY UPDATE title=VALUES(title),body=VALUES(body),
+        seo_title=VALUES(seo_title),seo_description=VALUES(seo_description),
+        is_published=VALUES(is_published),updated_at=NOW()
+    `, [
+      input.slug,
+      input.title,
+      input.body,
+      input.seoTitle || null,
+      input.seoDescription || null,
+      input.isPublished ? 1 : 0
+    ]);
+    await writeAuditLog({
+      actorUserId: auth.user.id,
+      action: "content.updated",
+      entityType: "page_content",
+      entityId: input.slug,
+      oldData: oldRows[0] || null,
+      newData: input,
+      request
+    });
+
     return NextResponse.json({ ok: true, item: input });
   } catch (error) {
-    if (error instanceof z.ZodError) return NextResponse.json({ message: "محتوای واردشده معتبر نیست.", errors: error.issues }, { status: 422 });
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ message: "محتوای واردشده معتبر نیست.", errors: error.issues }, { status: 422 });
+    }
     return NextResponse.json({ message: "ذخیره محتوا انجام نشد." }, { status: 500 });
   }
 }

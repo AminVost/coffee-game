@@ -1,11 +1,14 @@
 import mysql, { type Pool, type RowDataPacket, type ResultSetHeader } from "mysql2/promise";
+import { assertDatabaseConfiguration, env } from "@/lib/env";
 
 type SqlValue = string | number | bigint | boolean | Date | Buffer | null;
+
+assertDatabaseConfiguration();
 
 const globalDb = globalThis as unknown as { cgsPool?: Pool };
 
 export const db = globalDb.cgsPool ?? mysql.createPool({
-  uri: process.env.DATABASE_URL,
+  uri: env.databaseUrl,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,

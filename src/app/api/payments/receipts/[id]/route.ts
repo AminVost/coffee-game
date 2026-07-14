@@ -5,7 +5,6 @@ import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { hasPermission } from "@/lib/auth";
 import { queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 type ReceiptRow = RowDataPacket & {
   id: number;
@@ -19,10 +18,6 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   const auth = await authorize();
   if (auth.response) return auth.response;
   const { id } = await params;
-
-  if (env.dataMode === "mock") {
-    return NextResponse.json({ message: "در حالت Mock فایل واقعی وجود ندارد." }, { status: 404 });
-  }
 
   const rows = await queryRows<ReceiptRow[]>(`
     SELECT pr.id,pr.file_path,pr.mime_type,p.user_id,r.buyer_user_id

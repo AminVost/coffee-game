@@ -3,7 +3,6 @@ import type { RowDataPacket } from "mysql2";
 import { authorize } from "@/lib/authorization";
 import { currentSessionHash } from "@/lib/auth";
 import { queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 type SessionRow = RowDataPacket & {
   id: number;
@@ -17,19 +16,6 @@ type SessionRow = RowDataPacket & {
 export async function GET() {
   const auth = await authorize();
   if (auth.response) return auth.response;
-
-  if (env.dataMode === "mock") {
-    return NextResponse.json({
-      items: [{
-        id: "mock-current",
-        ipAddress: "127.0.0.1",
-        userAgent: "مرورگر فعلی",
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
-        isCurrent: true
-      }]
-    });
-  }
 
   const currentHash = currentSessionHash(auth.user);
   const rows = await queryRows<SessionRow[]>(`

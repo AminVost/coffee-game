@@ -18,7 +18,7 @@ export function RankingsSection({
   title,
   initialRows
 }: {
-  game: "fc26" | "backgammon";
+  game: string;
   title: string;
   initialRows: RankingRow[];
 }) {

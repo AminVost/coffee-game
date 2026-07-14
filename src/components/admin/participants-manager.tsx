@@ -24,7 +24,11 @@ const statusTitle: Record<string, string> = {
   NO_SHOW: "عدم حضور",
   PENDING_PAYMENT: "در انتظار پرداخت",
   PENDING_APPROVAL: "در انتظار تایید",
-  WAITLISTED: "لیست انتظار"
+  NEEDS_CORRECTION: "نیازمند اصلاح پرداخت",
+  WAITLISTED: "لیست انتظار",
+  REJECTED: "ردشده",
+  EXPIRED: "منقضی‌شده",
+  CANCELLED: "لغوشده"
 };
 
 export function ParticipantsManager() {
@@ -94,9 +98,10 @@ export function ParticipantsManager() {
                 <td className="p-4">{statusTitle[item.status] || item.status}</td>
                 <td className="p-4">
                   <div className="flex flex-wrap gap-2">
-                    {item.status !== "CHECKED_IN" && <Button size="sm" variant="soft" disabled={busyId === item.id} onClick={() => changeStatus(item.id, "CHECKED_IN")}><UserCheck size={15} />ثبت حضور</Button>}
-                    {item.status !== "NO_SHOW" && <Button size="sm" variant="secondary" className="text-amber-600" disabled={busyId === item.id} onClick={() => changeStatus(item.id, "NO_SHOW")}><UserX size={15} />عدم حضور</Button>}
+                    {["CONFIRMED", "NO_SHOW"].includes(item.status) && <Button size="sm" variant="soft" disabled={busyId === item.id} onClick={() => changeStatus(item.id, "CHECKED_IN")}><UserCheck size={15} />ثبت حضور</Button>}
+                    {["CONFIRMED", "CHECKED_IN"].includes(item.status) && <Button size="sm" variant="secondary" className="text-amber-600" disabled={busyId === item.id} onClick={() => changeStatus(item.id, "NO_SHOW")}><UserX size={15} />عدم حضور</Button>}
                     {["CHECKED_IN", "NO_SHOW"].includes(item.status) && <Button size="sm" variant="ghost" disabled={busyId === item.id} onClick={() => changeStatus(item.id, "CONFIRMED")}><Undo2 size={15} />بازگردانی</Button>}
+                    {!["CONFIRMED", "CHECKED_IN", "NO_SHOW"].includes(item.status) && <span className="text-xs text-[var(--muted)]">پس از تأیید پرداخت فعال می‌شود.</span>}
                   </div>
                 </td>
               </tr>)}

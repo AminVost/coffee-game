@@ -1,7 +1,4 @@
-"use client";
-
 import Image from "next/image";
-import { m, useReducedMotion } from "motion/react";
 import {
   ArrowLeft,
   CalendarDays,
@@ -24,7 +21,6 @@ export function HomeHero({
   featured?: Tournament;
   body: string;
 }) {
-  const reduceMotion = useReducedMotion();
   const percentage = featured
     ? Math.min(100, Math.round((featured.registered / Math.max(featured.capacity, 1)) * 100))
     : 0;
@@ -33,24 +29,17 @@ export function HomeHero({
     <section className="relative isolate overflow-hidden border-b border-[var(--line)]">
       <div className="hero-grid absolute inset-0 -z-20" />
       <div className="hero-noise absolute inset-0 -z-10" />
-      <m.div
+      <div
         aria-hidden="true"
         className="absolute -right-36 top-4 -z-10 h-[420px] w-[420px] rounded-full bg-emerald-500/20 blur-[120px]"
-        animate={reduceMotion ? undefined : { x: [0, -18, 0], y: [0, 14, 0] }}
-        transition={{ duration: 9, repeat: Infinity, ease: "easeInOut" }}
       />
-      <m.div
+      <div
         aria-hidden="true"
         className="absolute -left-32 bottom-0 -z-10 h-[380px] w-[380px] rounded-full bg-amber-400/15 blur-[115px]"
-        animate={reduceMotion ? undefined : { x: [0, 16, 0], y: [0, -12, 0] }}
-        transition={{ duration: 11, repeat: Infinity, ease: "easeInOut" }}
       />
 
       <div className="container-shell grid min-h-[720px] items-center gap-14 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-20">
-        <m.div
-          initial={{ opacity: 0, y: 28 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.62 }}
+        <div
         >
           <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-xs font-black text-emerald-500 shadow-sm backdrop-blur">
             <Sparkles size={15} />
@@ -94,18 +83,13 @@ export function HomeHero({
               بهینه برای موبایل
             </span>
           </div>
-        </m.div>
+        </div>
 
-        <m.div
-          initial={{ opacity: 0, scale: 0.96, x: -24 }}
-          animate={{ opacity: 1, scale: 1, x: 0 }}
-          transition={{ duration: 0.68, delay: 0.12 }}
+        <div
           className="relative mx-auto w-full max-w-[560px]"
         >
-          <m.div
+          <div
             className="glass-panel relative overflow-hidden rounded-[2rem] p-4 sm:p-5"
-            animate={reduceMotion ? undefined : { y: [0, -7, 0] }}
-            transition={{ duration: 5.5, repeat: Infinity, ease: "easeInOut" }}
           >
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-400/70 to-transparent" />
 
@@ -166,11 +150,9 @@ export function HomeHero({
                     </span>
                   </div>
                   <div className="h-2.5 overflow-hidden rounded-full bg-white/8">
-                    <m.span
+                    <span
                       className="block h-full rounded-full bg-gradient-to-l from-emerald-400 to-amber-300"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${featured ? percentage : 36}%` }}
-                      transition={{ delay: 0.55, duration: 0.9 }}
+                      style={{ width: `${featured ? percentage : 36}%` }}
                     />
                   </div>
                 </div>
@@ -196,17 +178,15 @@ export function HomeHero({
                 </div>
               ))}
             </div>
-          </m.div>
+          </div>
 
-          <m.div
+          <div
             aria-hidden="true"
             className="absolute -left-3 top-16 hidden rounded-2xl border border-amber-400/20 bg-[#161208]/90 px-4 py-3 text-xs font-black text-amber-300 shadow-xl backdrop-blur sm:block"
-            animate={reduceMotion ? undefined : { y: [0, 8, 0], rotate: [-1, 1, -1] }}
-            transition={{ duration: 4.8, repeat: Infinity, ease: "easeInOut" }}
           >
             قرعه‌کشی زنده
-          </m.div>
-        </m.div>
+          </div>
+        </div>
       </div>
     </section>
   );

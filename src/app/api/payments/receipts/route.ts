@@ -6,7 +6,6 @@ import type { RowDataPacket } from "mysql2";
 import { getSession, hasPermission } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
 import { db, queryRows } from "@/lib/db";
-import { env } from "@/lib/env";
 
 const allowed = new Map([
   ["image/jpeg", "jpg"],
@@ -24,6 +23,11 @@ type PaymentRow = RowDataPacket & {
   qr_token: string;
   status: string;
   old_file_path: string | null;
+  method: string;
+  payer_name: string | null;
+  payer_card_last4: string | null;
+  tracking_code: string | null;
+  paid_on: string | Date | null;
 };
 
 function matchesSignature(buffer: Buffer, mime: string) {
@@ -56,12 +60,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "محتوای واقعی فایل با نوع اعلام‌شده مطابقت ندارد." }, { status: 422 });
     }
 
-    if (env.dataMode === "mock") {
-      return NextResponse.json({ ok: true, receiptId: `mock-${Date.now()}` }, { status: 201 });
-    }
-
     const payments = await queryRows<PaymentRow[]>(`
-      SELECT p.id,p.public_id,p.user_id,p.registration_id,p.status,
+      SELECT p.id,p.public_id,p.user_id,p.registration_id,p.status,p.method,
+             p.payer_name,p.payer_card_last4,p.tracking_code,p.paid_on,
              r.buyer_user_id,r.qr_token,pr.file_path AS old_file_path
       FROM payments p
       JOIN registrations r ON r.id=p.registration_id
@@ -83,6 +84,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "وضعیت این پرداخت اجازه بارگذاری فیش جدید را نمی‌دهد." }, { status: 409 });
     }
 
+    if (!["card_to_card", "receipt"].includes(payment.method)) {
+      return NextResponse.json({ message: "تصویر رسید فقط برای انتقال بانکی قابل ثبت است." }, { status: 409 });
+    }
+
     const fileName = `${payment.id}-${randomUUID()}.${extension}`;
     const relativePath = path.posix.join("receipts", fileName);
     const storageDirectory = path.join(process.cwd(), "storage", "receipts");
@@ -100,14 +105,22 @@ export async function POST(request: Request) {
           file_path=VALUES(file_path),mime_type=VALUES(mime_type),
           file_size=VALUES(file_size),uploaded_at=NOW()
       `, [payment.id, relativePath, file.type, file.size]);
+      const hasPaymentDetails = Boolean(
+        payment.payer_name && payment.payer_card_last4 && payment.tracking_code && payment.paid_on
+      );
       await connection.execute(`
-        UPDATE payments SET method='receipt',status='PENDING',rejected_reason=NULL,updated_at=NOW()
+        UPDATE payments
+        SET status=IF(?,'PENDING',status),
+            rejected_reason=IF(?,NULL,rejected_reason),
+            updated_at=NOW()
         WHERE id=?
-      `, [payment.id]);
-      await connection.execute(`
-        UPDATE registrations SET status='PENDING_APPROVAL',updated_at=NOW()
-        WHERE id=? AND status NOT IN ('CANCELLED','REJECTED','WAITLISTED')
-      `, [payment.registration_id]);
+      `, [hasPaymentDetails ? 1 : 0, hasPaymentDetails ? 1 : 0, payment.id]);
+      if (hasPaymentDetails) {
+        await connection.execute(`
+          UPDATE registrations SET status='PENDING_APPROVAL',updated_at=NOW()
+          WHERE id=? AND status NOT IN ('CANCELLED','REJECTED','WAITLISTED')
+        `, [payment.registration_id]);
+      }
       await connection.commit();
     } catch (error) {
       await connection.rollback();
@@ -127,7 +140,7 @@ export async function POST(request: Request) {
       action: "payment.receipt_uploaded",
       entityType: "payment",
       entityId: payment.id,
-      newData: { filePath: relativePath, mimeType: file.type, fileSize: file.size },
+      newData: { filePath: relativePath, mimeType: file.type, fileSize: file.size, optional: true },
       request
     });
 
