@@ -6,6 +6,7 @@ import { loadUserAccess, setSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { acquirePlayerMobileLocks, ensureUserPlayer, releasePlayerMobileLocks } from "@/lib/player-identity";
+import { getRuntimeSettings } from "@/lib/runtime-settings";
 
 const schema = z.object({
   mobile: z.string().regex(/^09\d{9}$/),
@@ -200,6 +201,10 @@ export async function POST(request: Request) {
 
     const user = await loadUserAccess(userId);
     if (!user) return NextResponse.json({ message: "حساب کاربری ایجاد نشد." }, { status: 500 });
+    const runtime = await getRuntimeSettings();
+    if (user.role === "admin" && runtime.auth.admin2fa === "required") {
+      return NextResponse.json({ message: "ورود مدیر باید با رمز عبور و مرحله دوم انجام شود." }, { status: 403 });
+    }
     await setSession(user, request);
     return NextResponse.json({ ok: true, role: user.role });
   } catch (error) {

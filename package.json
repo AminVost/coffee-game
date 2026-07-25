@@ -6,7 +6,9 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "production:check": "npm run lint && npm run typecheck && npm run build"
   },
   "dependencies": {
     "@fontsource-variable/vazirmatn": "^5.2.8",

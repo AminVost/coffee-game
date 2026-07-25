@@ -125,6 +125,14 @@ const baseSql = `
       WHERE rh.tournament_id=t.id
         AND rh.status='ACTIVE'
         AND rh.expires_at>NOW()
+    )
+    +
+    (
+      SELECT COALESCE(SUM(w.slots),0)
+      FROM waitlist_entries w
+      WHERE w.tournament_id=t.id
+        AND w.status='OFFERED'
+        AND w.offer_expires_at>NOW()
     ) AS registered_count
   FROM tournaments t
   JOIN games g ON g.id=t.game_id
@@ -132,12 +140,13 @@ const baseSql = `
   WHERE t.deleted_at IS NULL
 `;
 
-export async function listTournaments(): Promise<Tournament[]> {
-  const rows = await queryRows<TournamentRow[]>(`${baseSql} ORDER BY t.is_featured DESC,t.starts_at ASC`);
+export async function listTournaments(includeNonPublic = false): Promise<Tournament[]> {
+  const visibility = includeNonPublic ? "" : " AND t.status NOT IN ('DRAFT','CANCELLED')";
+  const rows = await queryRows<TournamentRow[]>(`${baseSql}${visibility} ORDER BY t.is_featured DESC,t.starts_at ASC`);
   return rows.map(mapDbTournament);
 }
 
 export async function findTournament(slug: string): Promise<Tournament | null> {
-  const rows = await queryRows<TournamentRow[]>(`${baseSql} AND t.slug=? LIMIT 1`, [slug]);
+  const rows = await queryRows<TournamentRow[]>(`${baseSql} AND t.slug=? AND t.status NOT IN ('DRAFT','CANCELLED') LIMIT 1`, [slug]);
   return rows[0] ? mapDbTournament(rows[0]) : null;
 }

@@ -20,8 +20,7 @@ export async function GET() {
     SELECT tt.*,g.title AS game_title
     FROM tournament_templates tt
     JOIN games g ON g.id=tt.game_id
-    WHERE tt.is_active=1
-    ORDER BY tt.updated_at DESC
+    ORDER BY tt.is_active DESC, tt.updated_at DESC
   `);
   return NextResponse.json({ items: rows });
 }

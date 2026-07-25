@@ -30,7 +30,8 @@ export const env = {
   smsOtpCooldownSeconds: integerEnv("SMS_OTP_COOLDOWN_SECONDS", 60),
   smsOtpHourlyLimit: integerEnv("SMS_OTP_HOURLY_LIMIT", 5),
   smsOtpIpHourlyLimit: integerEnv("SMS_OTP_IP_HOURLY_LIMIT", 20),
-  sessionDays: integerEnv("SESSION_DAYS", 7)
+  sessionDays: integerEnv("SESSION_DAYS", 7),
+  maintenanceSecret: process.env.MAINTENANCE_SECRET?.trim() || ""
 } as const;
 
 export function assertDatabaseConfiguration() {
@@ -65,5 +66,6 @@ export function productionConfigurationWarnings() {
   }
   if (env.smsProvider !== "smsir") warnings.push("SMS_PROVIDER هنوز روی database است.");
   if (env.appUrl.includes("localhost")) warnings.push("NEXT_PUBLIC_APP_URL هنوز localhost است.");
+  if (!env.maintenanceSecret || env.maintenanceSecret.length < 32) warnings.push("MAINTENANCE_SECRET باید حداقل ۳۲ کاراکتر باشد.");
   return warnings;
 }

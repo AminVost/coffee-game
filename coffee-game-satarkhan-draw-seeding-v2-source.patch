@@ -1,0 +1,1751 @@
+diff --git a/src/app/(public)/draw/page.tsx b/src/app/(public)/draw/page.tsx
+index f50d567..a36a32b 100644
+--- a/src/app/(public)/draw/page.tsx
++++ b/src/app/(public)/draw/page.tsx
+@@ -1,9 +1,15 @@
+-import { CalendarClock, Shuffle } from "lucide-react";
++import Link from "next/link";
++import { Shuffle } from "lucide-react";
+ import type { RowDataPacket } from "mysql2";
++import { TournamentBracket } from "@/components/tournament-bracket";
+ import { Card } from "@/components/ui/card";
+ import { queryRows } from "@/lib/db";
+ 
++export const dynamic = "force-dynamic";
++
++type TournamentOption = RowDataPacket & { id: number; title: string; slug: string; status: string };
+ type DrawRow = RowDataPacket & {
++  tournament_id: number;
+   tournament_title: string;
+   round_id: number;
+   round_title: string;
+@@ -17,59 +23,67 @@ type DrawRow = RowDataPacket & {
+   away_score: number | null;
+   home_name: string | null;
+   away_name: string | null;
++  home_seed: number | null;
++  away_seed: number | null;
+ };
+ 
+-export const dynamic = "force-dynamic";
+-
+-export default async function Draw() {
+-  const rows = await queryRows<DrawRow[]>(`
+-    SELECT t.title AS tournament_title,r.id AS round_id,r.title AS round_title,r.round_number,r.stage,
+-      m.id AS match_id,m.match_number,m.status,m.scheduled_at,m.home_score,m.away_score,
+-      COALESCE(home_team.title,home_player.name) AS home_name,
+-      COALESCE(away_team.title,away_player.name) AS away_name
+-    FROM tournaments t
+-    JOIN tournament_rounds r ON r.tournament_id=t.id
+-    JOIN tournament_matches m ON m.round_id=r.id
+-    LEFT JOIN match_participants home_mp ON home_mp.match_id=m.id AND home_mp.slot=1
+-    LEFT JOIN teams home_team ON home_team.id=home_mp.team_id
+-    LEFT JOIN players home_player ON home_player.id=home_mp.player_id
+-    LEFT JOIN match_participants away_mp ON away_mp.match_id=m.id AND away_mp.slot=2
+-    LEFT JOIN teams away_team ON away_team.id=away_mp.team_id
+-    LEFT JOIN players away_player ON away_player.id=away_mp.player_id
+-    WHERE t.deleted_at IS NULL
+-      AND t.status IN ('DRAW_READY','RUNNING','COMPLETED')
+-      AND t.id=(
+-        SELECT t2.id FROM tournaments t2
+-        WHERE t2.deleted_at IS NULL AND t2.status IN ('DRAW_READY','RUNNING','COMPLETED')
+-          AND EXISTS(SELECT 1 FROM tournament_matches mx WHERE mx.tournament_id=t2.id)
+-        ORDER BY FIELD(t2.status,'RUNNING','DRAW_READY','COMPLETED'),t2.starts_at DESC,t2.id DESC
+-        LIMIT 1
+-      )
+-    ORDER BY r.round_number,r.stage,m.match_number
++export default async function Draw({ searchParams }: { searchParams: Promise<{ tournament?: string }> }) {
++  const requested = (await searchParams).tournament;
++  const tournaments = await queryRows<TournamentOption[]>(`
++    SELECT tournament.id,tournament.title,tournament.slug,tournament.status
++    FROM tournaments tournament
++    WHERE tournament.deleted_at IS NULL
++      AND tournament.status IN ('DRAW_READY','RUNNING','COMPLETED')
++      AND EXISTS(SELECT 1 FROM tournament_matches match_row WHERE match_row.tournament_id=tournament.id)
++    ORDER BY FIELD(tournament.status,'RUNNING','DRAW_READY','COMPLETED'),tournament.starts_at DESC,tournament.id DESC
++    LIMIT 30
+   `);
++  const selected = tournaments.find((tournament) => String(tournament.id) === requested || tournament.slug === requested) || tournaments[0];
++  const rows = selected ? await queryRows<DrawRow[]>(`
++    SELECT tournament.id AS tournament_id,tournament.title AS tournament_title,
++      round.id AS round_id,round.title AS round_title,round.round_number,round.stage,
++      match_row.id AS match_id,match_row.match_number,match_row.status,match_row.scheduled_at,
++      match_row.home_score,match_row.away_score,
++      COALESCE(home_team.title,home_player.name) AS home_name,
++      COALESCE(away_team.title,away_player.name) AS away_name,
++      home.seed AS home_seed,away.seed AS away_seed
++    FROM tournaments tournament
++    JOIN tournament_rounds round ON round.tournament_id=tournament.id
++    JOIN tournament_matches match_row ON match_row.round_id=round.id
++    LEFT JOIN match_participants home ON home.match_id=match_row.id AND home.slot=1
++    LEFT JOIN teams home_team ON home_team.id=home.team_id
++    LEFT JOIN players home_player ON home_player.id=home.player_id
++    LEFT JOIN match_participants away ON away.match_id=match_row.id AND away.slot=2
++    LEFT JOIN teams away_team ON away_team.id=away.team_id
++    LEFT JOIN players away_player ON away_player.id=away.player_id
++    WHERE tournament.id=?
++    ORDER BY round.round_number,round.stage,match_row.match_number
++  `, [selected.id]) : [];
+ 
+-  const rounds = new Map<number, { title: string; stage: string; rows: DrawRow[] }>();
+-  for (const row of rows) {
+-    const current: { title: string; stage: string; rows: DrawRow[] } = rounds.get(row.round_id) || { title: row.round_title, stage: row.stage, rows: [] };
+-    current.rows.push(row);
+-    rounds.set(row.round_id, current);
+-  }
++  const matches = rows.map((match) => ({
++    roundId: Number(match.round_id),
++    roundTitle: match.round_title,
++    roundNumber: Number(match.round_number),
++    stage: match.stage,
++    matchId: Number(match.match_id),
++    matchNumber: Number(match.match_number),
++    status: match.status,
++    scheduledAt: match.scheduled_at ? new Date(match.scheduled_at).toISOString() : null,
++    homeScore: match.home_score === null ? null : Number(match.home_score),
++    awayScore: match.away_score === null ? null : Number(match.away_score),
++    homeName: match.home_name,
++    awayName: match.away_name,
++    homeSeed: match.home_seed === null ? null : Number(match.home_seed),
++    awaySeed: match.away_seed === null ? null : Number(match.away_seed)
++  }));
+ 
+   return <div className="page-shell">
+     <p className="section-kicker">LIVE DRAW</p>
+-    <h1 className="section-title mt-2">قرعه و جدول مسابقات</h1>
+-    {rows[0] && <p className="mt-3 text-sm text-[var(--muted)]">{rows[0].tournament_title}</p>}
+-    <div className="mt-8 grid gap-6">
+-      {[...rounds.entries()].map(([roundId, round]) => <Card key={roundId} className="p-5 sm:p-7">
+-        <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[var(--brand)]/12 text-[var(--brand)]"><Shuffle size={18}/></span><div><h2 className="font-black">{round.title}</h2><p className="text-xs text-[var(--muted)]">{round.stage}</p></div></div>
+-        <div className="mt-5 grid gap-3 lg:grid-cols-2">
+-          {round.rows.map((match) => <div key={match.match_id} className="rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4">
+-            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-center"><strong>{match.home_name || "استراحت"}</strong><span className="rounded-xl bg-[var(--surface)] px-3 py-2 font-black">{match.home_score ?? "-"} : {match.away_score ?? "-"}</span><strong>{match.away_name || "استراحت"}</strong></div>
+-            <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--muted)]"><span>بازی {match.match_number.toLocaleString("fa-IR")} · {match.status}</span>{match.scheduled_at && <span className="flex items-center gap-1"><CalendarClock size={12}/>{new Intl.DateTimeFormat("fa-IR",{dateStyle:"short",timeStyle:"short"}).format(new Date(match.scheduled_at))}</span>}</div>
+-          </div>)}
+-        </div>
+-      </Card>)}
+-      {!rows.length && <Card className="p-10 text-center text-[var(--muted)]">هنوز قرعه‌ای برای نمایش ساخته نشده است.</Card>}
+-    </div>
++    <h1 className="section-title mt-2">قرعه و براکت مسابقات</h1>
++    {tournaments.length > 1 && <div className="mt-6 flex gap-2 overflow-x-auto pb-2">{tournaments.map((tournament) => <Link key={tournament.id} href={`/draw?tournament=${tournament.id}`} className={`shrink-0 rounded-2xl border px-4 py-2 text-sm font-bold ${selected?.id === tournament.id ? "border-[var(--brand)] bg-[var(--brand)] text-white" : "border-[var(--line)] bg-[var(--surface)]"}`}>{tournament.title}</Link>)}</div>}
++    {selected && <div className="mt-5 flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[var(--brand)]/12 text-[var(--brand)]"><Shuffle size={18}/></span><div><h2 className="font-black">{selected.title}</h2><p className="text-xs text-[var(--muted)]">{selected.status}</p></div></div>}
++    <Card className="mt-6 p-4 sm:p-7">
++      {matches.length ? <TournamentBracket matches={matches}/> : <div className="p-10 text-center text-[var(--muted)]">هنوز قرعه‌ای برای نمایش ساخته نشده است.</div>}
++    </Card>
+   </div>;
+ }
+diff --git a/src/app/admin/tournaments/[id]/draw/page.tsx b/src/app/admin/tournaments/[id]/draw/page.tsx
+new file mode 100644
+index 0000000..61e1dfd
+--- /dev/null
++++ b/src/app/admin/tournaments/[id]/draw/page.tsx
+@@ -0,0 +1,14 @@
++import { DrawManager } from "@/components/admin/draw-manager";
++import { requireAdminPage } from "@/lib/page-authorization";
++
++export const dynamic = "force-dynamic";
++
++export default async function TournamentDrawPage({ params }: { params: Promise<{ id: string }> }) {
++  await requireAdminPage("draws.manage");
++  const { id } = await params;
++  return <div>
++    <p className="section-kicker">DRAW MANAGEMENT</p>
++    <h1 className="section-title mt-2">مدیریت قرعه و Seed بندی</h1>
++    <DrawManager tournamentId={id}/>
++  </div>;
++}
+diff --git a/src/app/api/admin/tournaments/[id]/draw/route.ts b/src/app/api/admin/tournaments/[id]/draw/route.ts
+index 90ec303..fd981d6 100644
+--- a/src/app/api/admin/tournaments/[id]/draw/route.ts
++++ b/src/app/api/admin/tournaments/[id]/draw/route.ts
+@@ -1,26 +1,320 @@
+ import { NextResponse } from "next/server";
++import { z } from "zod";
++import type { ResultSetHeader, RowDataPacket } from "mysql2";
+ import { authorize } from "@/lib/authorization";
+ import { writeAuditLog } from "@/lib/audit";
+-import { generateTournamentDraw } from "@/lib/tournament-engine";
++import { db, queryRows } from "@/lib/db";
++import {
++  generateTournamentDraw,
++  previewTournamentDraw,
++  regenerateTournamentDraw,
++  resetTournamentDraw
++} from "@/lib/tournament-engine";
++
++const participantKeySchema = z.string().regex(/^(p|t):\d+$/);
++const pairingSchema = z.object({
++  homeKey: participantKeySchema.nullable(),
++  awayKey: participantKeySchema.nullable()
++});
++const actionSchema = z.object({
++  action: z.enum(["preview", "generate", "regenerate"]).default("generate"),
++  participantOrder: z.array(participantKeySchema).max(5000).optional(),
++  pairings: z.array(pairingSchema).max(2500).optional()
++});
++const seedSchema = z.object({
++  seeds: z.array(z.object({
++    entryId: z.number().int().positive(),
++    seed: z.number().int().min(1).max(5000).nullable()
++  })).min(1).max(5000)
++});
+ 
+ const messages: Record<string, string> = {
+   TOURNAMENT_NOT_FOUND: "مسابقه یافت نشد.",
+-  TOURNAMENT_NOT_READY_FOR_DRAW: "وضعیت مسابقه برای قرعه‌کشی مناسب نیست.",
++  TOURNAMENT_NOT_READY_FOR_DRAW: "ابتدا ثبت‌نام مسابقه را ببندید؛ قرعه فقط در وضعیت REGISTRATION_CLOSED ساخته می‌شود.",
+   DRAW_ALREADY_EXISTS: "قرعه این مسابقه قبلاً ساخته شده است.",
+-  NOT_ENOUGH_PARTICIPANTS: "حداقل دو شرکت‌کننده تأییدشده لازم است."
++  NOT_ENOUGH_PARTICIPANTS: "حداقل دو شرکت‌کننده تأییدشده لازم است.",
++  MINIMUM_PARTICIPANTS_NOT_REACHED: "تعداد شرکت‌کنندگان تأییدشده به حداقل تعیین‌شده مسابقه نرسیده است.",
++  DUPLICATE_SEED: "Seed تکراری است. هر Seed باید فقط به یک شرکت‌کننده اختصاص داده شود.",
++  INVALID_SEED: "مقدار Seed نامعتبر است.",
++  INVALID_PARTICIPANT_ORDER: "ترتیب شرکت‌کنندگان نامعتبر یا ناقص است.",
++  MANUAL_DRAW_EMPTY: "برای قرعه دستی حداقل یک Pairing لازم است.",
++  MANUAL_DRAW_EMPTY_PAIR: "یک Pairing کاملاً خالی در قرعه دستی وجود دارد.",
++  MANUAL_DRAW_UNKNOWN_PARTICIPANT: "یکی از شرکت‌کنندگان قرعه دستی متعلق به این مسابقه نیست.",
++  MANUAL_DRAW_DUPLICATE_PARTICIPANT: "یک شرکت‌کننده بیش از یک بار در قرعه دستی قرار گرفته است.",
++  MANUAL_DRAW_MISSING_PARTICIPANT: "همه شرکت‌کنندگان باید دقیقاً یک بار در قرعه دستی قرار بگیرند.",
++  DRAW_RESET_LOCKED: "پس از شروع یا تکمیل یک بازی، حذف یا قرعه مجدد مجاز نیست.",
++  DRAW_HAS_DISPUTES: "برای بازی‌های این قرعه اعتراض ثبت شده و حذف قرعه مجاز نیست.",
++  DOUBLE_ELIMINATION_STATE_INVALID: "وضعیت براکت دوحذفی ناسازگار است."
++};
++
++function errorResponse(error: unknown) {
++  if (error instanceof z.ZodError) {
++    return NextResponse.json({ message: "اطلاعات قرعه نامعتبر است.", errors: error.issues }, { status: 422 });
++  }
++  const code = error instanceof Error ? error.message : "";
++  return NextResponse.json(
++    { message: messages[code] || "عملیات قرعه انجام نشد.", code: code || undefined },
++    { status: code === "TOURNAMENT_NOT_FOUND" ? 404 : 409 }
++  );
++}
++
++function formatCategory(format: string) {
++  const normalized = format.toLowerCase();
++  if (normalized.includes("گروه") || normalized.includes("group")) return "group";
++  if (normalized.includes("سوئیس") || normalized.includes("swiss")) return "swiss";
++  if (normalized.includes("دوحذفی") || normalized.includes("double elimination")) return "double";
++  if (normalized.includes("لیگ") || normalized.includes("round robin")) return "league";
++  return "knockout";
++}
++
++async function parseBody(request: Request) {
++  const text = await request.text();
++  return text.trim() ? JSON.parse(text) : { action: "generate" };
++}
++
++async function tournamentId(params: Promise<{ id: string }>) {
++  const { id } = await params;
++  return /^\d+$/.test(id) ? Number(id) : null;
++}
++
++type TournamentInfo = RowDataPacket & {
++  id: number;
++  title: string;
++  status: string;
++  format: string;
++  draw_mode: string;
++  min_participants: number;
++  participant_type: string;
++};
++
++type ParticipantRow = RowDataPacket & {
++  entry_id: number;
++  registration_id: number;
++  player_id: number | null;
++  team_id: number | null;
++  seed: number | null;
++  name: string;
++  mobile: string | null;
+ };
+ 
++type MatchRow = RowDataPacket & {
++  round_id: number;
++  round_title: string;
++  round_number: number;
++  stage: string;
++  match_id: number;
++  match_number: number;
++  status: string;
++  scheduled_at: Date | null;
++  home_score: number | null;
++  away_score: number | null;
++  home_key: string | null;
++  away_key: string | null;
++  home_name: string | null;
++  away_name: string | null;
++  home_seed: number | null;
++  away_seed: number | null;
++};
++
++export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
++  const auth = await authorize("draws.manage");
++  if (auth.response) return auth.response;
++  const id = await tournamentId(params);
++  if (!id) return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++
++  const [tournamentRows, participants, matches] = await Promise.all([
++    queryRows<TournamentInfo[]>(`
++      SELECT id,title,status,format,draw_mode,min_participants,participant_type
++      FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1
++    `, [id]),
++    queryRows<ParticipantRow[]>(`
++      SELECT re.id AS entry_id,re.registration_id,re.player_id,re.team_id,re.seed,
++        COALESCE(team.title,player.name,'بدون نام') AS name,
++        player.mobile
++      FROM registration_entries re
++      JOIN registrations registration ON registration.id=re.registration_id
++      LEFT JOIN players player ON player.id=re.player_id
++      LEFT JOIN teams team ON team.id=re.team_id
++      WHERE registration.tournament_id=?
++        AND registration.deleted_at IS NULL
++        AND registration.status IN ('CONFIRMED','CHECKED_IN')
++      ORDER BY COALESCE(re.seed,999999),re.id
++    `, [id]),
++    queryRows<MatchRow[]>(`
++      SELECT round.id AS round_id,round.title AS round_title,round.round_number,round.stage,
++        match_row.id AS match_id,match_row.match_number,match_row.status,match_row.scheduled_at,
++        match_row.home_score,match_row.away_score,
++        CASE WHEN home.player_id IS NOT NULL THEN CONCAT('p:',home.player_id)
++             WHEN home.team_id IS NOT NULL THEN CONCAT('t:',home.team_id) END AS home_key,
++        CASE WHEN away.player_id IS NOT NULL THEN CONCAT('p:',away.player_id)
++             WHEN away.team_id IS NOT NULL THEN CONCAT('t:',away.team_id) END AS away_key,
++        COALESCE(home_team.title,home_player.name) AS home_name,
++        COALESCE(away_team.title,away_player.name) AS away_name,
++        home.seed AS home_seed,away.seed AS away_seed
++      FROM tournament_rounds round
++      JOIN tournament_matches match_row ON match_row.round_id=round.id
++      LEFT JOIN match_participants home ON home.match_id=match_row.id AND home.slot=1
++      LEFT JOIN teams home_team ON home_team.id=home.team_id
++      LEFT JOIN players home_player ON home_player.id=home.player_id
++      LEFT JOIN match_participants away ON away.match_id=match_row.id AND away.slot=2
++      LEFT JOIN teams away_team ON away_team.id=away.team_id
++      LEFT JOIN players away_player ON away_player.id=away.player_id
++      WHERE round.tournament_id=?
++      ORDER BY round.round_number,round.stage,match_row.match_number
++    `, [id])
++  ]);
++
++  const tournament = tournamentRows[0];
++  if (!tournament) return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++
++  return NextResponse.json({
++    tournament: {
++      id: String(tournament.id),
++      title: tournament.title,
++      status: tournament.status,
++      format: tournament.format,
++      drawMode: tournament.draw_mode,
++      minimumParticipants: Number(tournament.min_participants),
++      participantType: tournament.participant_type,
++      category: formatCategory(tournament.format)
++    },
++    participants: participants.map((participant) => ({
++      entryId: Number(participant.entry_id),
++      registrationId: Number(participant.registration_id),
++      key: participant.player_id ? `p:${participant.player_id}` : `t:${participant.team_id}`,
++      name: participant.name,
++      mobile: participant.mobile,
++      seed: participant.seed === null ? null : Number(participant.seed)
++    })),
++    matches: matches.map((match) => ({
++      roundId: Number(match.round_id),
++      roundTitle: match.round_title,
++      roundNumber: Number(match.round_number),
++      stage: match.stage,
++      matchId: Number(match.match_id),
++      matchNumber: Number(match.match_number),
++      status: match.status,
++      scheduledAt: match.scheduled_at ? new Date(match.scheduled_at).toISOString() : null,
++      homeScore: match.home_score === null ? null : Number(match.home_score),
++      awayScore: match.away_score === null ? null : Number(match.away_score),
++      homeKey: match.home_key,
++      awayKey: match.away_key,
++      homeName: match.home_name,
++      awayName: match.away_name,
++      homeSeed: match.home_seed === null ? null : Number(match.home_seed),
++      awaySeed: match.away_seed === null ? null : Number(match.away_seed)
++    })),
++    canReset: !matches.some((match) => ["LIVE", "COMPLETED"].includes(match.status)),
++    drawExists: matches.length > 0
++  });
++}
++
++export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
++  const auth = await authorize("draws.manage");
++  if (auth.response) return auth.response;
++  const id = await tournamentId(params);
++  if (!id) return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++
++  const connection = await db.getConnection();
++  try {
++    const input = seedSchema.parse(await request.json());
++    await connection.beginTransaction();
++    const [existingDraw] = await connection.query<RowDataPacket[]>(`
++      SELECT id FROM tournament_matches WHERE tournament_id=? LIMIT 1 FOR UPDATE
++    `, [id]);
++    if (existingDraw[0]) throw new Error("DRAW_ALREADY_EXISTS");
++
++    const [entries] = await connection.query<Array<RowDataPacket & { id: number; seed: number | null }>>(`
++      SELECT re.id,re.seed
++      FROM registration_entries re
++      JOIN registrations registration ON registration.id=re.registration_id
++      WHERE registration.tournament_id=?
++        AND registration.deleted_at IS NULL
++        AND registration.status IN ('CONFIRMED','CHECKED_IN')
++      FOR UPDATE
++    `, [id]);
++    const entryIds = new Set(entries.map((entry) => Number(entry.id)));
++    if (input.seeds.some((item) => !entryIds.has(item.entryId))) {
++      throw new Error("MANUAL_DRAW_UNKNOWN_PARTICIPANT");
++    }
++
++    const nextSeeds = new Map(entries.map((entry) => [Number(entry.id), entry.seed === null ? null : Number(entry.seed)]));
++    input.seeds.forEach((item) => nextSeeds.set(item.entryId, item.seed));
++    const values = [...nextSeeds.values()].filter((seed): seed is number => seed !== null);
++    if (new Set(values).size !== values.length) throw new Error("DUPLICATE_SEED");
++
++    for (const item of input.seeds) {
++      await connection.execute<ResultSetHeader>(`
++        UPDATE registration_entries SET seed=? WHERE id=?
++      `, [item.seed, item.entryId]);
++    }
++    await connection.commit();
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: "tournament.seeds_updated",
++      entityType: "tournament",
++      entityId: id,
++      newData: input,
++      request
++    });
++    return NextResponse.json({ ok: true });
++  } catch (error) {
++    await connection.rollback();
++    return errorResponse(error);
++  } finally {
++    connection.release();
++  }
++}
++
+ export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+   const auth = await authorize("draws.manage");
+   if (auth.response) return auth.response;
+-  const { id } = await params;
+-  if (!/^\d+$/.test(id)) return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++  const id = await tournamentId(params);
++  if (!id) return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++
++  try {
++    const input = actionSchema.parse(await parseBody(request));
++    const options = { participantOrder: input.participantOrder, manualPairings: input.pairings };
++    const result = input.action === "preview"
++      ? await previewTournamentDraw(id, options)
++      : input.action === "regenerate"
++        ? await regenerateTournamentDraw(id, options)
++        : await generateTournamentDraw(id, options);
++
++    if (input.action !== "preview") {
++      await writeAuditLog({
++        actorUserId: auth.user.id,
++        action: input.action === "regenerate" ? "tournament.draw_regenerated" : "tournament.draw_generated",
++        entityType: "tournament",
++        entityId: id,
++        newData: result,
++        request
++      });
++    }
++    return NextResponse.json({ ok: true, ...result });
++  } catch (error) {
++    return errorResponse(error);
++  }
++}
++
++export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
++  const auth = await authorize("draws.manage");
++  if (auth.response) return auth.response;
++  const id = await tournamentId(params);
++  if (!id) return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++
+   try {
+-    const result = await generateTournamentDraw(Number(id));
+-    await writeAuditLog({ actorUserId: auth.user.id, action: "tournament.draw_generated", entityType: "tournament", entityId: id, newData: result, request });
++    const result = await resetTournamentDraw(id);
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: "tournament.draw_reset",
++      entityType: "tournament",
++      entityId: id,
++      newData: result,
++      request
++    });
+     return NextResponse.json({ ok: true, ...result });
+   } catch (error) {
+-    const code = error instanceof Error ? error.message : "";
+-    return NextResponse.json({ message: messages[code] || "ساخت قرعه انجام نشد." }, { status: code === "TOURNAMENT_NOT_FOUND" ? 404 : 409 });
++    return errorResponse(error);
+   }
+ }
+diff --git a/src/components/admin/draw-manager.tsx b/src/components/admin/draw-manager.tsx
+new file mode 100644
+index 0000000..ad2c82f
+--- /dev/null
++++ b/src/components/admin/draw-manager.tsx
+@@ -0,0 +1,251 @@
++/* eslint-disable react-hooks/set-state-in-effect */
++"use client";
++
++import { useCallback, useEffect, useMemo, useState } from "react";
++import { Dices, GripVertical, RefreshCcw, Save, Shuffle, Trash2, WandSparkles } from "lucide-react";
++import { TournamentBracket } from "@/components/tournament-bracket";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { Input } from "@/components/ui/input";
++
++type Participant = {
++  entryId: number;
++  registrationId: number;
++  key: string;
++  name: string;
++  mobile: string | null;
++  seed: number | null;
++};
++
++type Match = {
++  roundId: number;
++  roundTitle: string;
++  roundNumber: number;
++  stage: string;
++  matchId: number;
++  matchNumber: number;
++  status: string;
++  scheduledAt: string | null;
++  homeScore: number | null;
++  awayScore: number | null;
++  homeKey: string | null;
++  awayKey: string | null;
++  homeName: string | null;
++  awayName: string | null;
++  homeSeed: number | null;
++  awaySeed: number | null;
++};
++
++type DrawData = {
++  tournament: {
++    id: string;
++    title: string;
++    status: string;
++    format: string;
++    drawMode: "random" | "seeded" | "custom";
++    minimumParticipants: number;
++    participantType: string;
++    category: "knockout" | "league" | "group" | "swiss" | "double";
++  };
++  participants: Participant[];
++  matches: Match[];
++  canReset: boolean;
++  drawExists: boolean;
++};
++
++type Pairing = { homeKey: string | null; awayKey: string | null };
++type Preview = {
++  category: string;
++  drawMode: string;
++  bracketSize: number;
++  orderedKeys: string[];
++  slots: Array<string | null>;
++  pairings: Pairing[];
++  warnings: string[];
++};
++
++function nextPowerOfTwo(value: number) {
++  let size = 2;
++  while (size < Math.max(2, value)) size *= 2;
++  return size;
++}
++
++export function DrawManager({ tournamentId }: { tournamentId: string }) {
++  const [data, setData] = useState<DrawData | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [busy, setBusy] = useState("");
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++  const [seedDraft, setSeedDraft] = useState<Record<string, string>>( {} );
++  const [manualSlots, setManualSlots] = useState<Array<string | null>>([]);
++  const [draggedKey, setDraggedKey] = useState<string | null>(null);
++  const [preview, setPreview] = useState<Preview | null>(null);
++
++  const load = useCallback(async () => {
++    setLoading(true);
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/draw`, { cache: "no-store" });
++    const payload = await response.json();
++    setLoading(false);
++    if (!response.ok) return setError(payload.message || "دریافت اطلاعات قرعه انجام نشد.");
++    setData(payload);
++    setSeedDraft(Object.fromEntries(payload.participants.map((participant: Participant) => [participant.key, participant.seed === null ? "" : String(participant.seed)])));
++    if (!payload.drawExists) {
++      const pairingCategory = ["knockout", "double"].includes(payload.tournament.category);
++      const slotCount = pairingCategory ? nextPowerOfTwo(payload.participants.length) : payload.participants.length;
++      setManualSlots((current) => current.length === slotCount ? current : [
++        ...payload.participants.map((participant: Participant) => participant.key),
++        ...Array(Math.max(0, slotCount - payload.participants.length)).fill(null)
++      ]);
++    }
++  }, [tournamentId]);
++
++  useEffect(() => { void load(); }, [load]);
++
++  const participantByKey = useMemo(() => new Map((data?.participants || []).map((participant) => [participant.key, participant])), [data]);
++  const assignedKeys = useMemo(() => new Set(manualSlots.filter((key): key is string => Boolean(key))), [manualSlots]);
++  const unassigned = useMemo(() => (data?.participants || []).filter((participant) => !assignedKeys.has(participant.key)), [data, assignedKeys]);
++
++  function placeParticipant(slotIndex: number, key: string) {
++    setManualSlots((current) => {
++      const next = current.map((value) => value === key ? null : value);
++      next[slotIndex] = key;
++      return next;
++    });
++    setPreview(null);
++  }
++
++  function pairingsFromSlots() {
++    const pairings: Pairing[] = [];
++    for (let index = 0; index < manualSlots.length; index += 2) {
++      const pairing = { homeKey: manualSlots[index], awayKey: manualSlots[index + 1] };
++      if (pairing.homeKey || pairing.awayKey) pairings.push(pairing);
++    }
++    return pairings;
++  }
++
++  async function saveSeeds() {
++    if (!data) return;
++    setBusy("seeds"); setError(""); setMessage("");
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/draw`, {
++      method: "PATCH",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({
++        seeds: data.participants.map((participant) => ({
++          entryId: participant.entryId,
++          seed: seedDraft[participant.key]?.trim() ? Number(seedDraft[participant.key]) : null
++        }))
++      })
++    });
++    const payload = await response.json();
++    setBusy("");
++    if (!response.ok) return setError(payload.message || "ذخیره Seedها انجام نشد.");
++    setMessage("Seed شرکت‌کنندگان ذخیره شد.");
++    setPreview(null);
++    await load();
++  }
++
++  function autoSeed() {
++    if (!data) return;
++    setSeedDraft(Object.fromEntries(data.participants.map((participant, index) => [participant.key, String(index + 1)])));
++    setPreview(null);
++  }
++
++  async function run(action: "preview" | "generate" | "regenerate") {
++    if (!data) return;
++    setBusy(action); setError(""); setMessage("");
++    const body: Record<string, unknown> = { action };
++    if (data.tournament.drawMode === "custom") {
++      if (["knockout", "double"].includes(data.tournament.category)) {
++        body.pairings = pairingsFromSlots();
++      } else {
++        body.participantOrder = manualSlots.filter((key): key is string => Boolean(key));
++      }
++    } else if (preview && action !== "preview") {
++      body.participantOrder = preview.orderedKeys;
++      if (["knockout", "double"].includes(preview.category)) body.pairings = preview.pairings;
++    }
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/draw`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify(body)
++    });
++    const payload = await response.json();
++    setBusy("");
++    if (!response.ok) return setError(payload.message || "عملیات قرعه انجام نشد.");
++    if (action === "preview") {
++      setPreview(payload);
++      return setMessage("پیش‌نمایش ساخته شد؛ با تأیید نهایی همین Pairing ذخیره می‌شود.");
++    }
++    setPreview(null);
++    setMessage(action === "regenerate" ? "قرعه با موفقیت بازسازی شد." : "قرعه با موفقیت ثبت شد.");
++    await load();
++  }
++
++  async function reset() {
++    if (!window.confirm("قرعه حذف شود؟ این کار فقط تا قبل از شروع بازی‌ها ممکن است.")) return;
++    setBusy("reset"); setError(""); setMessage("");
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/draw`, { method: "DELETE" });
++    const payload = await response.json();
++    setBusy("");
++    if (!response.ok) return setError(payload.message || "حذف قرعه انجام نشد.");
++    setPreview(null);
++    setMessage("قرعه حذف شد و مسابقه به وضعیت ثبت‌نام بسته بازگشت.");
++    await load();
++  }
++
++  function manualSlot(slotIndex: number, emptyLabel: string) {
++    const key = manualSlots[slotIndex];
++    const participant = key ? participantByKey.get(key) : null;
++    return <div
++      key={slotIndex}
++      onDragOver={(event) => event.preventDefault()}
++      onDrop={() => { if (draggedKey) placeParticipant(slotIndex, draggedKey); setDraggedKey(null); }}
++      className="min-h-20 rounded-xl border border-dashed border-[var(--line)] bg-[var(--surface-2)] p-3"
++    >
++      <div className="flex h-full items-center justify-between gap-2">
++        {participant ? <button type="button" draggable onDragStart={() => setDraggedKey(participant.key)} className="flex min-w-0 cursor-grab items-center gap-2 text-right text-sm font-bold"><GripVertical size={15}/><span className="truncate">{participant.name}</span></button> : <span className="text-xs text-[var(--muted)]">{emptyLabel}</span>}
++        {participant && <button type="button" className="text-xs text-red-500" onClick={() => { setManualSlots((current) => current.map((value, index) => index === slotIndex ? null : value)); setPreview(null); }}>حذف</button>}
++      </div>
++    </div>;
++  }
++
++  if (loading && !data) return <Card className="mt-7 p-10 text-center text-[var(--muted)]">در حال دریافت اطلاعات قرعه...</Card>;
++  if (!data) return <Alert tone="error" className="mt-6">{error || "اطلاعات مسابقه دریافت نشد."}</Alert>;
++
++  const canCreate = data.tournament.status === "REGISTRATION_CLOSED" && data.participants.length >= data.tournament.minimumParticipants;
++
++  return <div className="mt-7 grid gap-6">
++    {error && <Alert tone="error">{error}</Alert>}
++    {message && <Alert tone="success">{message}</Alert>}
++
++    <Card className="p-5 sm:p-7">
++      <div className="flex flex-wrap items-start justify-between gap-4">
++        <div><h2 className="text-xl font-black">{data.tournament.title}</h2><p className="mt-2 text-sm text-[var(--muted)]">{data.tournament.format} · روش قرعه: {data.tournament.drawMode} · وضعیت: {data.tournament.status}</p></div>
++        <div className="rounded-2xl bg-[var(--surface-2)] px-4 py-3 text-sm"><b>{data.participants.length.toLocaleString("fa-IR")}</b> شرکت‌کننده تأییدشده · حداقل {data.tournament.minimumParticipants.toLocaleString("fa-IR")}</div>
++      </div>
++      {!canCreate && !data.drawExists && <Alert tone="warning" className="mt-5">برای ساخت قرعه، وضعیت مسابقه باید `REGISTRATION_CLOSED` باشد و تعداد شرکت‌کنندگان به حداقل تعیین‌شده برسد.</Alert>}
++    </Card>
++
++    {!data.drawExists && <Card className="p-5 sm:p-7">
++      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">Seed بندی شرکت‌کنندگان</h2><p className="mt-1 text-xs text-[var(--muted)]">Seedهای کمتر در موقعیت‌های استاندارد براکت قرار می‌گیرند و Seedهای برتر در دور اول مقابل هم قرار نمی‌گیرند.</p></div><div className="flex gap-2"><Button type="button" variant="secondary" size="sm" onClick={autoSeed}><WandSparkles size={15}/>Seed خودکار</Button><Button type="button" size="sm" loading={busy === "seeds"} onClick={saveSeeds}><Save size={15}/>ذخیره Seed</Button></div></div>
++      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{data.participants.map((participant) => <div key={participant.key} className="grid grid-cols-[1fr_90px] items-center gap-3 rounded-2xl border border-[var(--line)] p-3"><div className="min-w-0"><strong className="block truncate">{participant.name}</strong><span className="text-xs text-[var(--muted)]" dir="ltr">{participant.mobile || participant.key}</span></div><Input type="number" min="1" max="5000" placeholder="Seed" value={seedDraft[participant.key] || ""} onChange={(event) => { setSeedDraft((current) => ({ ...current, [participant.key]: event.target.value })); setPreview(null); }}/></div>)}</div>
++    </Card>}
++
++    {!data.drawExists && data.tournament.drawMode === "custom" && <Card className="p-5 sm:p-7">
++      <h2 className="font-black">{["knockout", "double"].includes(data.tournament.category) ? "قرعه دستی Drag & Drop" : "ترتیب دستی شرکت‌کنندگان"}</h2>
++      <p className="mt-1 text-xs text-[var(--muted)]">{["knockout", "double"].includes(data.tournament.category) ? "هر شرکت‌کننده را در یکی از خانه‌ها رها کن. دو خانه متوالی یک بازی را می‌سازند؛ خانه خالی به معنی Bye است." : "ترتیب شرکت‌کنندگان را با Drag & Drop تعیین کن؛ موتور مسابقه گروه‌ها یا Pairingها را بر اساس همین ترتیب می‌سازد."}</p>
++      {unassigned.length > 0 && <div className="mt-5 flex flex-wrap gap-2 rounded-2xl border border-dashed border-[var(--line)] p-4">{unassigned.map((participant) => <button key={participant.key} type="button" draggable onDragStart={() => setDraggedKey(participant.key)} className="flex cursor-grab items-center gap-2 rounded-xl bg-[var(--surface-2)] px-3 py-2 text-sm font-bold active:cursor-grabbing"><GripVertical size={15}/>{participant.name}</button>)}</div>}
++      {["knockout", "double"].includes(data.tournament.category)
++        ? <div className="mt-5 grid gap-4 lg:grid-cols-2">{Array.from({ length: manualSlots.length / 2 }, (_, pairIndex) => <div key={pairIndex} className="rounded-2xl border border-[var(--line)] p-3"><p className="mb-3 text-xs font-black text-[var(--muted)]">بازی {(pairIndex + 1).toLocaleString("fa-IR")}</p><div className="grid gap-2 sm:grid-cols-2">{manualSlot(pairIndex * 2, "بازیکن اول / Bye")}{manualSlot(pairIndex * 2 + 1, "بازیکن دوم / Bye")}</div></div>)}</div>
++        : <div className="mt-5 grid gap-3 md:grid-cols-2">{manualSlots.map((_, slotIndex) => <div key={slotIndex} className="grid grid-cols-[40px_1fr] items-center gap-3"><span className="text-center text-xs font-black text-[var(--muted)]">{(slotIndex + 1).toLocaleString("fa-IR")}</span>{manualSlot(slotIndex, "شرکت‌کننده را اینجا رها کن")}</div>)}</div>}
++    </Card>}
++
++    {!data.drawExists && <Card className="p-5 sm:p-7">
++      <div className="flex flex-wrap gap-3"><Button type="button" variant="secondary" loading={busy === "preview"} disabled={!canCreate} onClick={() => run("preview")}><Dices size={17}/>پیش‌نمایش قرعه</Button><Button type="button" loading={busy === "generate"} disabled={!canCreate} onClick={() => run("generate")}><Shuffle size={17}/>ثبت نهایی قرعه</Button></div>
++      {preview && <div className="mt-6"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="font-black">{preview.pairings.length ? "پیش‌نمایش دور اول" : "پیش‌نمایش ترتیب شرکت‌کنندگان"}</h3>{preview.pairings.length ? <span className="text-xs text-[var(--muted)]">اندازه براکت: {preview.bracketSize.toLocaleString("fa-IR")}</span> : null}</div>{preview.warnings?.map((warning) => <Alert key={warning} tone="warning" className="mb-3">{warning}</Alert>)}{preview.pairings.length ? <div className="grid gap-3 md:grid-cols-2">{preview.pairings.map((pairing, index) => <div key={index} className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-center"><strong>{pairing.homeKey ? participantByKey.get(pairing.homeKey)?.name : "استراحت"}</strong><span className="text-xs text-[var(--muted)]">VS</span><strong>{pairing.awayKey ? participantByKey.get(pairing.awayKey)?.name : "استراحت"}</strong></div>)}</div> : <div className="grid gap-2 md:grid-cols-2">{preview.orderedKeys.map((key, index) => <div key={key} className="flex items-center gap-3 rounded-2xl bg-[var(--surface-2)] p-3"><span className="grid h-8 w-8 place-items-center rounded-xl bg-[var(--brand)]/12 text-xs font-black text-[var(--brand)]">{(index + 1).toLocaleString("fa-IR")}</span><strong>{participantByKey.get(key)?.name}</strong></div>)}</div>}</div>}
++    </Card>}
++
++    {data.drawExists && <Card className="p-5 sm:p-7"><div className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">براکت ثبت‌شده</h2><p className="mt-1 text-xs text-[var(--muted)]">Reset و قرعه مجدد فقط پیش از شروع یا تکمیل بازی‌ها امکان‌پذیر است.</p></div><div className="flex gap-2">{data.canReset && data.tournament.drawMode !== "custom" && <Button type="button" variant="secondary" loading={busy === "regenerate"} onClick={() => run("regenerate")}><RefreshCcw size={16}/>قرعه مجدد</Button>}{data.canReset && <Button type="button" variant="dangerSoft" loading={busy === "reset"} onClick={reset}><Trash2 size={16}/>حذف قرعه</Button>}</div></div><TournamentBracket matches={data.matches}/></Card>}
++  </div>;
++}
+diff --git a/src/components/admin/tournaments-manager.tsx b/src/components/admin/tournaments-manager.tsx
+index 510bcf5..01d91eb 100644
+--- a/src/components/admin/tournaments-manager.tsx
++++ b/src/components/admin/tournaments-manager.tsx
+@@ -26,7 +26,7 @@ export function TournamentsManager({ initialItems, permissions }: { initialItems
+     setItems((current) => current.filter((row) => row.id !== item.id));
+   }
+ 
+-  async function runAction(item: Tournament, action: "draw" | "schedule" | "ranking") {
++  async function runAction(item: Tournament, action: "schedule" | "ranking") {
+     setBusyId(`${action}:${item.id}`); setError(""); setMessage("");
+     const endpoint = action === "ranking" ? "/api/admin/rankings/recalculate" : `/api/admin/tournaments/${item.id}/${action}`;
+     const response = await fetch(endpoint, {
+@@ -37,12 +37,12 @@ export function TournamentsManager({ initialItems, permissions }: { initialItems
+     const payload = await response.json();
+     setBusyId("");
+     if (!response.ok) return setError(payload.message || "عملیات انجام نشد.");
+-    setMessage(action === "draw" ? "قرعه مسابقه ساخته شد." : action === "schedule" ? "بازی‌ها زمان‌بندی شدند." : "رنکینگ محاسبه شد.");
++    setMessage(action === "schedule" ? "بازی‌ها زمان‌بندی شدند." : "رنکینگ محاسبه شد.");
+   }
+ 
+   return <>
+     {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+     {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+-    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{item.status}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canDraw && <Button type="button" disabled={busyId === `draw:${item.id}`} onClick={() => runAction(item, "draw")} variant="secondary" size="iconSm" aria-label="ساخت قرعه"><Shuffle size={15} /></Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `schedule:${item.id}`} onClick={() => runAction(item, "schedule")} variant="secondary" size="iconSm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} /></Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runAction(item, "ranking")} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
++    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{item.status}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `schedule:${item.id}`} onClick={() => runAction(item, "schedule")} variant="secondary" size="iconSm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} /></Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runAction(item, "ranking")} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
+   </>;
+ }
+diff --git a/src/components/tournament-bracket.tsx b/src/components/tournament-bracket.tsx
+new file mode 100644
+index 0000000..7641e15
+--- /dev/null
++++ b/src/components/tournament-bracket.tsx
+@@ -0,0 +1,79 @@
++import { CalendarClock } from "lucide-react";
++import { cn } from "@/lib/utils";
++
++type BracketMatch = {
++  roundId: number;
++  roundTitle: string;
++  roundNumber: number;
++  stage: string;
++  matchId: number;
++  matchNumber: number;
++  status: string;
++  scheduledAt: string | null;
++  homeScore: number | null;
++  awayScore: number | null;
++  homeName: string | null;
++  awayName: string | null;
++  homeSeed?: number | null;
++  awaySeed?: number | null;
++};
++
++const stageTitle: Record<string, string> = {
++  knockout: "براکت حذفی",
++  third_place: "رده‌بندی سوم",
++  swiss: "سیستم سوئیسی",
++  league: "لیگ",
++  double_winners: "براکت برندگان",
++  double_losers: "براکت بازندگان",
++  double_final: "فینال دوحذفی",
++  double_reset: "فینال مجدد"
++};
++
++function participant(name: string | null, seed?: number | null) {
++  return <span className="flex min-w-0 items-center gap-2">
++    {seed ? <span className="grid h-6 min-w-6 place-items-center rounded-lg bg-[var(--brand)]/12 px-1 text-[10px] font-black text-[var(--brand)]">{seed.toLocaleString("fa-IR")}</span> : null}
++    <strong className="truncate">{name || "استراحت"}</strong>
++  </span>;
++}
++
++export function TournamentBracket({ matches, compact = false }: { matches: BracketMatch[]; compact?: boolean }) {
++  const stages = new Map<string, Map<number, { title: string; matches: BracketMatch[] }>>();
++  for (const match of matches) {
++    const stage = stages.get(match.stage) || new Map();
++    const round = stage.get(match.roundId) || { title: match.roundTitle, matches: [] };
++    round.matches.push(match);
++    stage.set(match.roundId, round);
++    stages.set(match.stage, stage);
++  }
++
++  return <div className="grid gap-8">
++    {[...stages.entries()].map(([stage, rounds]) => <section key={stage}>
++      <div className="mb-4 flex items-center gap-3">
++        <span className="h-2.5 w-2.5 rounded-full bg-[var(--brand)]" />
++        <h3 className="font-black">{stageTitle[stage] || stage.replaceAll("_", " ")}</h3>
++      </div>
++      <div className="overflow-x-auto pb-4">
++        <div className="flex min-w-max items-stretch gap-8">
++          {[...rounds.entries()].map(([roundId, round], roundIndex) => {
++            const gap = compact ? 12 : Math.min(80, 14 + roundIndex * 18);
++            return <div key={roundId} className="relative w-[290px] shrink-0">
++              <div className="mb-3 rounded-xl bg-[var(--surface-2)] px-3 py-2 text-center text-xs font-black text-[var(--muted)]">{round.title}</div>
++              <div className="flex h-full flex-col justify-around" style={{ gap }}>
++                {round.matches.map((match) => <article key={match.matchId} className={cn("relative rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-3 shadow-sm", !compact && "after:absolute after:-left-8 after:top-1/2 after:hidden after:h-px after:w-8 after:bg-[var(--line)] md:after:block")}>
++                  <div className="grid gap-2 text-sm">
++                    <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--surface-2)] px-3 py-2">{participant(match.homeName, match.homeSeed)}<b>{match.homeScore ?? "-"}</b></div>
++                    <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--surface-2)] px-3 py-2">{participant(match.awayName, match.awaySeed)}<b>{match.awayScore ?? "-"}</b></div>
++                  </div>
++                  <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--muted)]">
++                    <span>بازی {match.matchNumber.toLocaleString("fa-IR")} · {match.status}</span>
++                    {match.scheduledAt ? <span className="flex items-center gap-1"><CalendarClock size={11}/>{new Intl.DateTimeFormat("fa-IR",{dateStyle:"short",timeStyle:"short"}).format(new Date(match.scheduledAt))}</span> : null}
++                  </div>
++                </article>)}
++              </div>
++            </div>;
++          })}
++        </div>
++      </div>
++    </section>)}
++  </div>;
++}
+diff --git a/src/lib/draw-planner.ts b/src/lib/draw-planner.ts
+new file mode 100644
+index 0000000..143b6ac
+--- /dev/null
++++ b/src/lib/draw-planner.ts
+@@ -0,0 +1,151 @@
++export type BracketParticipant = {
++  key: string;
++  seed: number | null;
++};
++
++export type PlannedPairing = {
++  homeKey: string | null;
++  awayKey: string | null;
++};
++
++export type KnockoutPlan = {
++  bracketSize: number;
++  orderedKeys: string[];
++  slots: Array<string | null>;
++  pairings: PlannedPairing[];
++  warnings: string[];
++};
++
++export type DrawPlanOptions = {
++  participantOrder?: string[];
++  manualPairings?: PlannedPairing[];
++  random?: () => number;
++};
++
++export function nextPowerOfTwo(value: number) {
++  let result = 2;
++  while (result < Math.max(2, value)) result *= 2;
++  return result;
++}
++
++/**
++ * Returns the conventional seed layout for a power-of-two bracket.
++ * Example for 8 slots: 1,8,4,5,2,7,3,6.
++ */
++export function standardSeedOrder(size: number) {
++  if (size < 2 || (size & (size - 1)) !== 0) {
++    throw new Error("INVALID_BRACKET_SIZE");
++  }
++  let order = [1, 2];
++  for (let current = 4; current <= size; current *= 2) {
++    order = order.flatMap((seed) => [seed, current + 1 - seed]);
++  }
++  return order;
++}
++
++function shuffled<T>(items: T[], random: () => number) {
++  const result = [...items];
++  for (let index = result.length - 1; index > 0; index -= 1) {
++    const swapIndex = Math.floor(random() * (index + 1));
++    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
++  }
++  return result;
++}
++
++function orderedByKeys<T extends BracketParticipant>(participants: T[], keys: string[]) {
++  const byKey = new Map(participants.map((participant) => [participant.key, participant]));
++  if (keys.length !== participants.length || new Set(keys).size !== participants.length) {
++    throw new Error("INVALID_PARTICIPANT_ORDER");
++  }
++  const ordered = keys.map((key) => byKey.get(key));
++  if (ordered.some((participant) => !participant)) throw new Error("INVALID_PARTICIPANT_ORDER");
++  return ordered as T[];
++}
++
++function validateExplicitSeeds<T extends BracketParticipant>(participants: T[]) {
++  const seeds = participants
++    .map((participant) => participant.seed)
++    .filter((seed): seed is number => seed !== null);
++  if (seeds.some((seed) => !Number.isInteger(seed) || seed < 1)) throw new Error("INVALID_SEED");
++  if (new Set(seeds).size !== seeds.length) throw new Error("DUPLICATE_SEED");
++}
++
++export function validateManualPairings<T extends BracketParticipant>(
++  participants: T[],
++  pairings: PlannedPairing[]
++) {
++  const participantKeys = new Set(participants.map((participant) => participant.key));
++  const used = new Set<string>();
++
++  if (!pairings.length) throw new Error("MANUAL_DRAW_EMPTY");
++  for (const pairing of pairings) {
++    if (!pairing.homeKey && !pairing.awayKey) throw new Error("MANUAL_DRAW_EMPTY_PAIR");
++    for (const key of [pairing.homeKey, pairing.awayKey]) {
++      if (!key) continue;
++      if (!participantKeys.has(key)) throw new Error("MANUAL_DRAW_UNKNOWN_PARTICIPANT");
++      if (used.has(key)) throw new Error("MANUAL_DRAW_DUPLICATE_PARTICIPANT");
++      used.add(key);
++    }
++  }
++  if (used.size !== participants.length) throw new Error("MANUAL_DRAW_MISSING_PARTICIPANT");
++}
++
++export function planKnockout<T extends BracketParticipant>(
++  participants: T[],
++  mode: "random" | "seeded" | "custom",
++  options: DrawPlanOptions = {}
++): KnockoutPlan {
++  if (participants.length < 2) throw new Error("NOT_ENOUGH_PARTICIPANTS");
++
++  if (options.manualPairings) {
++    validateManualPairings(participants, options.manualPairings);
++    const pairings = options.manualPairings.map((pairing) => (
++      !pairing.homeKey && pairing.awayKey
++        ? { homeKey: pairing.awayKey, awayKey: null }
++        : pairing
++    ));
++    const slots = pairings.flatMap((pairing) => [pairing.homeKey, pairing.awayKey]);
++    return {
++      bracketSize: nextPowerOfTwo(slots.length),
++      orderedKeys: slots.filter((key): key is string => Boolean(key)),
++      slots,
++      pairings,
++      warnings: []
++    };
++  }
++
++  let ordered = [...participants];
++  if (options.participantOrder) {
++    ordered = orderedByKeys(participants, options.participantOrder);
++  } else if (mode === "random") {
++    ordered = shuffled(participants, options.random || Math.random);
++  } else if (mode === "seeded") {
++    validateExplicitSeeds(participants);
++    ordered.sort((left, right) => (
++      (left.seed ?? Number.MAX_SAFE_INTEGER) - (right.seed ?? Number.MAX_SAFE_INTEGER)
++      || left.key.localeCompare(right.key)
++    ));
++  }
++
++  const warnings: string[] = [];
++  if (mode === "seeded" && ordered.some((participant) => participant.seed === null)) {
++    warnings.push("برخی شرکت‌کنندگان Seed ندارند و بعد از Seedهای تعیین‌شده قرار گرفته‌اند.");
++  }
++
++  const bracketSize = nextPowerOfTwo(ordered.length);
++  const slotOrder = standardSeedOrder(bracketSize);
++  const byVirtualSeed = new Map(ordered.map((participant, index) => [index + 1, participant.key]));
++  const slots = slotOrder.map((virtualSeed) => byVirtualSeed.get(virtualSeed) || null);
++  const pairings: PlannedPairing[] = [];
++  for (let index = 0; index < slots.length; index += 2) {
++    pairings.push({ homeKey: slots[index], awayKey: slots[index + 1] });
++  }
++
++  return {
++    bracketSize,
++    orderedKeys: ordered.map((participant) => participant.key),
++    slots,
++    pairings,
++    warnings
++  };
++}
+diff --git a/src/lib/tournament-engine.ts b/src/lib/tournament-engine.ts
+index a6ccd6c..fddaed3 100644
+--- a/src/lib/tournament-engine.ts
++++ b/src/lib/tournament-engine.ts
+@@ -1,6 +1,7 @@
+ import type { ResultSetHeader, RowDataPacket } from "mysql2";
+ import type { PoolConnection } from "mysql2/promise";
+ import { db } from "@/lib/db";
++import { planKnockout, type PlannedPairing } from "@/lib/draw-planner";
+ 
+ type Participant = {
+   playerId: number | null;
+@@ -12,6 +13,7 @@ type Participant = {
+ type TournamentRow = RowDataPacket & {
+   id: number;
+   game_id: number;
++  min_participants: number;
+   format: string;
+   draw_mode: string;
+   has_third_place: number;
+@@ -80,15 +82,6 @@ function isDoubleRoundRobin(format: string) {
+   return formatCategory(format) === "league" && isTwoLegged(format);
+ }
+ 
+-function shuffled<T>(items: T[]) {
+-  const result = [...items];
+-  for (let index = result.length - 1; index > 0; index -= 1) {
+-    const swapIndex = Math.floor(Math.random() * (index + 1));
+-    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+-  }
+-  return result;
+-}
+-
+ async function loadTournament(connection: PoolConnection, tournamentId: number) {
+   const [rows] = await connection.query<TournamentRow[]>(`
+     SELECT t.*,g.slug AS game_slug
+@@ -202,11 +195,17 @@ async function createMatch(
+   return result.insertId;
+ }
+ 
+-function padForKnockout(participants: Participant[]) {
+-  const size = 2 ** Math.ceil(Math.log2(Math.max(2, participants.length)));
+-  const result: Array<Participant | null> = [...participants];
+-  while (result.length < size) result.push(null);
+-  return result;
++function adjacentKnockoutPairings(participants: Participant[]) {
++  const list: Array<Participant | null> = [...participants];
++  while (list.length > 2 && (list.length & (list.length - 1)) !== 0) list.push(null);
++  const pairings: PlannedPairing[] = [];
++  for (let index = 0; index < list.length; index += 2) {
++    pairings.push({
++      homeKey: list[index]?.key || null,
++      awayKey: list[index + 1]?.key || null
++    });
++  }
++  return pairings;
+ }
+ 
+ async function createKnockoutRound(
+@@ -216,10 +215,12 @@ async function createKnockoutRound(
+   roundNumber: number,
+   title: string,
+   stage = "knockout",
+-  forceSingleLeg = false
++  forceSingleLeg = false,
++  requestedPairings?: PlannedPairing[]
+ ) {
+   const twoLegged = !forceSingleLeg && isTwoLegged(tournament.format);
+-  const padded = padForKnockout(participants);
++  const pairings = requestedPairings || adjacentKnockoutPairings(participants);
++  const byKey = new Map(participants.map((participant) => [participant.key, participant]));
+   const roundId = await createRound(
+     connection,
+     tournament.id,
+@@ -227,15 +228,21 @@ async function createKnockoutRound(
+     roundNumber,
+     stage,
+     roundNumber === 1 ? new Date(tournament.starts_at) : null,
+-    { participantCount: participants.length, twoLegged }
++    {
++      participantCount: participants.length,
++      twoLegged,
++      pairingCount: pairings.length,
++      drawMode: tournament.draw_mode
++    }
+   );
+   let matchNumber = await nextMatchNumber(connection, tournament.id);
+ 
+-  for (let index = 0; index < padded.length; index += 2) {
+-    const home = padded[index];
+-    const away = padded[index + 1];
++  for (let index = 0; index < pairings.length; index += 1) {
++    const pairing = pairings[index];
++    const home = pairing.homeKey ? byKey.get(pairing.homeKey) || null : null;
++    const away = pairing.awayKey ? byKey.get(pairing.awayKey) || null : null;
+     if (!home && !away) continue;
+-    const pairKey = `${stage}:${roundNumber}:${index / 2 + 1}`;
++    const pairKey = `${stage}:${roundNumber}:${index + 1}`;
+     await createMatch(connection, tournament.id, roundId, matchNumber++, home, away, {
+       pairKey,
+       legNumber: 1
+@@ -304,7 +311,12 @@ async function createGroupStage(
+   const requestedGroupSize = Math.round(safeNumber(settings.groupSize, 4, 3, 8));
+   const groupCount = Math.max(1, Math.ceil(participants.length / requestedGroupSize));
+   const groups = Array.from({ length: groupCount }, () => [] as Participant[]);
+-  participants.forEach((participant, index) => groups[index % groupCount].push(participant));
++  participants.forEach((participant, index) => {
++    const row = Math.floor(index / groupCount);
++    const column = index % groupCount;
++    const groupIndex = row % 2 === 0 ? column : groupCount - 1 - column;
++    groups[groupIndex].push(participant);
++  });
+ 
+   for (let index = 0; index < groups.length; index += 1) {
+     const groupName = String.fromCharCode(65 + index);
+@@ -341,28 +353,100 @@ async function createSwissRound(
+   participants: Participant[],
+   roundNumber: number
+ ) {
++  const standings = await standingsFromMatches(connection, tournament.id, "swiss");
++  const standingByKey = new Map(standings.map((standing) => [standing.participant.key, standing]));
+   const previous = await previousPairs(connection, tournament.id);
+-  const remaining = [...participants];
+-  const pairings: Array<[Participant, Participant | null]> = [];
++  const opponents = new Map<string, Set<string>>();
++  const byeCount = new Map<string, number>();
+ 
+-  while (remaining.length) {
+-    const home = remaining.shift()!;
+-    if (!remaining.length) {
+-      pairings.push([home, null]);
+-      break;
++  const [historyRows] = await connection.query<Array<RowDataPacket & {
++    match_id: number;
++    player_id: number | null;
++    team_id: number | null;
++  }>>(`
++    SELECT m.id AS match_id,mp.player_id,mp.team_id
++    FROM tournament_matches m
++    JOIN tournament_rounds r ON r.id=m.round_id AND r.stage='swiss'
++    JOIN match_participants mp ON mp.match_id=m.id
++    WHERE m.tournament_id=? AND m.status='COMPLETED'
++    ORDER BY m.id,mp.slot
++  `, [tournament.id]);
++
++  const byMatch = new Map<number, string[]>();
++  for (const row of historyRows) {
++    const keys = byMatch.get(Number(row.match_id)) || [];
++    keys.push(participantKey(row.player_id, row.team_id));
++    byMatch.set(Number(row.match_id), keys);
++  }
++  for (const keys of byMatch.values()) {
++    if (keys.length === 1) {
++      byeCount.set(keys[0], (byeCount.get(keys[0]) || 0) + 1);
++      continue;
++    }
++    if (keys.length >= 2) {
++      const [first, second] = keys;
++      const firstOpponents = opponents.get(first) || new Set<string>();
++      const secondOpponents = opponents.get(second) || new Set<string>();
++      firstOpponents.add(second);
++      secondOpponents.add(first);
++      opponents.set(first, firstOpponents);
++      opponents.set(second, secondOpponents);
+     }
+-    let opponentIndex = remaining.findIndex((candidate) => !previous.has(`${home.key}|${candidate.key}`));
+-    if (opponentIndex < 0) opponentIndex = 0;
+-    pairings.push([home, remaining.splice(opponentIndex, 1)[0] || null]);
+   }
+ 
++  const pointsOf = (key: string) => standingByKey.get(key)?.points || 0;
++  const buchholzOf = (key: string) => [...(opponents.get(key) || [])]
++    .reduce((sum, opponentKey) => sum + pointsOf(opponentKey), 0);
++  const ordered = [...participants].sort((left, right) => {
++    const leftStanding = standingByKey.get(left.key);
++    const rightStanding = standingByKey.get(right.key);
++    return (
++      pointsOf(right.key) - pointsOf(left.key)
++      || buchholzOf(right.key) - buchholzOf(left.key)
++      || ((rightStanding?.scored || 0) - (rightStanding?.conceded || 0))
++        - ((leftStanding?.scored || 0) - (leftStanding?.conceded || 0))
++      || (left.seed ?? Number.MAX_SAFE_INTEGER) - (right.seed ?? Number.MAX_SAFE_INTEGER)
++      || left.key.localeCompare(right.key)
++    );
++  });
++
++  let bye: Participant | null = null;
++  if (ordered.length % 2) {
++    const reversed = [...ordered].reverse();
++    bye = reversed.find((participant) => (byeCount.get(participant.key) || 0) === 0)
++      || reversed.sort((left, right) => (byeCount.get(left.key) || 0) - (byeCount.get(right.key) || 0))[0]
++      || null;
++    if (bye) ordered.splice(ordered.findIndex((participant) => participant.key === bye?.key), 1);
++  }
++
++  const pairings: Array<[Participant, Participant | null]> = [];
++  while (ordered.length) {
++    const home = ordered.shift()!;
++    let bestIndex = 0;
++    let bestPenalty = Number.POSITIVE_INFINITY;
++    for (let index = 0; index < ordered.length; index += 1) {
++      const candidate = ordered[index];
++      const repeated = previous.has(`${home.key}|${candidate.key}`) ? 1 : 0;
++      const scoreGap = Math.abs(pointsOf(home.key) - pointsOf(candidate.key));
++      const buchholzGap = Math.abs(buchholzOf(home.key) - buchholzOf(candidate.key));
++      const penalty = repeated * 1_000_000 + scoreGap * 10_000 + buchholzGap * 100 + index;
++      if (penalty < bestPenalty) {
++        bestPenalty = penalty;
++        bestIndex = index;
++      }
++    }
++    pairings.push([home, ordered.splice(bestIndex, 1)[0] || null]);
++  }
++  if (bye) pairings.push([bye, null]);
++
+   const roundId = await createRound(
+     connection,
+     tournament.id,
+     `دور سوئیسی ${roundNumber}`,
+     roundNumber,
+     "swiss",
+-    roundNumber === 1 ? new Date(tournament.starts_at) : null
++    roundNumber === 1 ? new Date(tournament.starts_at) : null,
++    { pairing: "score-group", buchholz: true, avoidsRepeat: true }
+   );
+   let matchNumber = await nextMatchNumber(connection, tournament.id);
+   for (let index = 0; index < pairings.length; index += 1) {
+@@ -377,28 +461,54 @@ async function createDoubleEliminationRound(
+   connection: PoolConnection,
+   tournament: TournamentRow,
+   participants: Participant[],
+-  roundNumber: number
++  roundNumber: number,
++  stage: "double_winners" | "double_losers" | "double_final" | "double_reset" = "double_winners",
++  requestedPairings?: PlannedPairing[]
+ ) {
+   const previous = await previousPairs(connection, tournament.id);
+-  const remaining = [...participants];
++  const byKey = new Map(participants.map((participant) => [participant.key, participant]));
++  const pairings: PlannedPairing[] = [];
++
++  if (requestedPairings) {
++    pairings.push(...requestedPairings);
++  } else {
++    const remaining = [...participants];
++    while (remaining.length) {
++      const home = remaining.shift()!;
++      let opponentIndex = remaining.findIndex(
++        (candidate) => !previous.has(`${home.key}|${candidate.key}`)
++      );
++      if (opponentIndex < 0) opponentIndex = 0;
++      const away = remaining.splice(opponentIndex, 1)[0] || null;
++      pairings.push({ homeKey: home.key, awayKey: away?.key || null });
++    }
++  }
++
++  const title = stage === "double_winners"
++    ? `براکت برندگان - دور ${roundNumber}`
++    : stage === "double_losers"
++      ? `براکت بازندگان - دور ${roundNumber}`
++      : stage === "double_final"
++        ? "فینال دوحذفی"
++        : "فینال مجدد دوحذفی";
+   const roundId = await createRound(
+     connection,
+     tournament.id,
+-    `دور دوحذفی ${roundNumber}`,
++    title,
+     roundNumber,
+-    "double_elimination",
+-    roundNumber === 1 ? new Date(tournament.starts_at) : null
++    stage,
++    roundNumber === 1 ? new Date(tournament.starts_at) : null,
++    { bracket: stage }
+   );
+   let matchNumber = await nextMatchNumber(connection, tournament.id);
+-  let pairIndex = 1;
+ 
+-  while (remaining.length) {
+-    const home = remaining.shift()!;
+-    let opponentIndex = remaining.findIndex((candidate) => !previous.has(`${home.key}|${candidate.key}`));
+-    if (opponentIndex < 0) opponentIndex = 0;
+-    const away = remaining.splice(opponentIndex, 1)[0] || null;
++  for (let index = 0; index < pairings.length; index += 1) {
++    const pairing = pairings[index];
++    const home = pairing.homeKey ? byKey.get(pairing.homeKey) || null : null;
++    const away = pairing.awayKey ? byKey.get(pairing.awayKey) || null : null;
++    if (!home && !away) continue;
+     await createMatch(connection, tournament.id, roundId, matchNumber++, home, away, {
+-      pairKey: `double:${roundNumber}:${pairIndex++}`
++      pairKey: `${stage}:${roundNumber}:${index + 1}`
+     });
+   }
+ }
+@@ -568,53 +678,247 @@ async function recomputeDoubleState(connection: PoolConnection, tournamentId: nu
+   }
+ }
+ 
+-export async function generateTournamentDraw(tournamentId: number) {
++export type TournamentDrawOptions = {
++  participantOrder?: string[];
++  manualPairings?: PlannedPairing[];
++};
++
++function drawMode(value: string): "random" | "seeded" | "custom" {
++  return value === "seeded" || value === "custom" ? value : "random";
++}
++
++function participantsFromOrder(participants: Participant[], orderedKeys: string[]) {
++  const byKey = new Map(participants.map((participant) => [participant.key, participant]));
++  return orderedKeys.map((key) => {
++    const participant = byKey.get(key);
++    if (!participant) throw new Error("INVALID_PARTICIPANT_ORDER");
++    return participant;
++  });
++}
++
++function buildInitialPlan(
++  tournament: TournamentRow,
++  participants: Participant[],
++  options: TournamentDrawOptions = {}
++) {
++  const category = formatCategory(tournament.format);
++  const knockoutPlan = planKnockout(participants, drawMode(tournament.draw_mode), {
++    participantOrder: options.participantOrder,
++    manualPairings: category === "knockout" || category === "double"
++      ? options.manualPairings
++      : undefined
++  });
++  const plan = category === "knockout" || category === "double"
++    ? knockoutPlan
++    : { ...knockoutPlan, slots: knockoutPlan.orderedKeys, pairings: [] };
++  return {
++    category,
++    plan,
++    orderedParticipants: participantsFromOrder(participants, plan.orderedKeys)
++  };
++}
++
++async function ensureDrawCanBeCreated(
++  connection: PoolConnection,
++  tournament: TournamentRow,
++  participants: Participant[]
++) {
++  if (tournament.status !== "REGISTRATION_CLOSED") {
++    throw new Error("TOURNAMENT_NOT_READY_FOR_DRAW");
++  }
++  if (participants.length < Math.max(2, Number(tournament.min_participants || 2))) {
++    throw new Error("MINIMUM_PARTICIPANTS_NOT_REACHED");
++  }
++  const [existing] = await connection.query<RowDataPacket[]>(`
++    SELECT id FROM tournament_matches WHERE tournament_id=? LIMIT 1
++  `, [tournament.id]);
++  if (existing[0]) throw new Error("DRAW_ALREADY_EXISTS");
++}
++
++async function createInitialDraw(
++  connection: PoolConnection,
++  tournament: TournamentRow,
++  participants: Participant[],
++  options: TournamentDrawOptions = {}
++) {
++  await ensureDrawCanBeCreated(connection, tournament, participants);
++  const { category, plan, orderedParticipants } = buildInitialPlan(tournament, participants, options);
++
++  if (category === "league") {
++    await createRoundRobin(
++      connection,
++      tournament,
++      orderedParticipants,
++      isDoubleRoundRobin(tournament.format),
++      "league",
++      "هفته"
++    );
++  } else if (category === "group") {
++    await createGroupStage(connection, tournament, orderedParticipants);
++  } else if (category === "swiss") {
++    await createSwissRound(connection, tournament, orderedParticipants, 1);
++  } else if (category === "double") {
++    for (const participant of orderedParticipants) {
++      await connection.execute(`
++        INSERT INTO tournament_participant_state(
++          tournament_id,player_id,team_id,losses,eliminated,updated_at
++        ) VALUES(?,?,?,?,0,NOW())
++      `, [tournament.id, participant.playerId, participant.teamId, 0]);
++    }
++    await createDoubleEliminationRound(
++      connection,
++      tournament,
++      orderedParticipants,
++      1,
++      "double_winners",
++      plan.pairings
++    );
++  } else {
++    await createKnockoutRound(
++      connection,
++      tournament,
++      orderedParticipants,
++      1,
++      "دور اول",
++      "knockout",
++      false,
++      plan.pairings
++    );
++  }
++
++  await connection.execute(`
++    UPDATE tournaments SET status='DRAW_READY',updated_at=NOW() WHERE id=?
++  `, [tournament.id]);
++  return {
++    participants: participants.length,
++    category,
++    bracketSize: plan.bracketSize,
++    orderedKeys: plan.orderedKeys,
++    pairings: plan.pairings,
++    warnings: plan.warnings
++  };
++}
++
++async function resetDrawInTransaction(connection: PoolConnection, tournamentId: number) {
++  const [lockedMatches] = await connection.query<RowDataPacket[]>(`
++    SELECT id
++    FROM tournament_matches
++    WHERE tournament_id=?
++      AND (status IN ('LIVE','COMPLETED') OR started_at IS NOT NULL OR completed_at IS NOT NULL)
++    LIMIT 1
++    FOR UPDATE
++  `, [tournamentId]);
++  if (lockedMatches[0]) throw new Error("DRAW_RESET_LOCKED");
++
++  const [disputes] = await connection.query<RowDataPacket[]>(`
++    SELECT d.id
++    FROM match_disputes d
++    JOIN tournament_matches m ON m.id=d.match_id
++    WHERE m.tournament_id=?
++    LIMIT 1
++    FOR UPDATE
++  `, [tournamentId]);
++  if (disputes[0]) throw new Error("DRAW_HAS_DISPUTES");
++
++  await connection.execute(`
++    DELETE mp FROM match_participants mp
++    JOIN tournament_matches m ON m.id=mp.match_id
++    WHERE m.tournament_id=?
++  `, [tournamentId]);
++  await connection.execute(`DELETE FROM tournament_matches WHERE tournament_id=?`, [tournamentId]);
++  await connection.execute(`DELETE FROM tournament_rounds WHERE tournament_id=?`, [tournamentId]);
++  await connection.execute(`DELETE FROM tournament_participant_state WHERE tournament_id=?`, [tournamentId]);
++  await connection.execute(`
++    UPDATE tournaments SET status='REGISTRATION_CLOSED',updated_at=NOW() WHERE id=?
++  `, [tournamentId]);
++}
++
++export async function previewTournamentDraw(
++  tournamentId: number,
++  options: TournamentDrawOptions = {}
++) {
+   const connection = await db.getConnection();
+   try {
+     await connection.beginTransaction();
+     const tournament = await loadTournament(connection, tournamentId);
+     if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
+-    if (!["REGISTRATION_CLOSED", "DRAW_READY", "PUBLISHED"].includes(tournament.status)) {
++    if (!["REGISTRATION_CLOSED", "DRAW_READY"].includes(tournament.status)) {
+       throw new Error("TOURNAMENT_NOT_READY_FOR_DRAW");
+     }
+-
+-    const [existing] = await connection.query<RowDataPacket[]>(`
+-      SELECT id FROM tournament_matches WHERE tournament_id=? LIMIT 1
+-    `, [tournament.id]);
+-    if (existing[0]) throw new Error("DRAW_ALREADY_EXISTS");
+-
+-    let participants = await loadParticipants(connection, tournament.id);
+-    if (participants.length < 2) throw new Error("NOT_ENOUGH_PARTICIPANTS");
+-    if (tournament.draw_mode === "random") participants = shuffled(participants);
+-    if (tournament.draw_mode === "seeded") {
+-      participants.sort((left, right) => (left.seed ?? 999999) - (right.seed ?? 999999));
++    const participants = await loadParticipants(connection, tournament.id);
++    if (participants.length < Math.max(2, Number(tournament.min_participants || 2))) {
++      throw new Error("MINIMUM_PARTICIPANTS_NOT_REACHED");
+     }
++    const { category, plan } = buildInitialPlan(tournament, participants, options);
++    await connection.rollback();
++    return {
++      participants: participants.length,
++      minimumParticipants: Number(tournament.min_participants || 2),
++      category,
++      drawMode: drawMode(tournament.draw_mode),
++      ...plan
++    };
++  } catch (error) {
++    await connection.rollback();
++    throw error;
++  } finally {
++    connection.release();
++  }
++}
+ 
+-    const category = formatCategory(tournament.format);
+-    if (category === "league") {
+-      await createRoundRobin(connection, tournament, participants, isDoubleRoundRobin(tournament.format), "league", "هفته");
+-    } else if (category === "group") {
+-      await createGroupStage(connection, tournament, participants);
+-    } else if (category === "swiss") {
+-      await createSwissRound(connection, tournament, participants, 1);
+-    } else if (category === "double") {
+-      for (const participant of participants) {
+-        await connection.execute(`
+-          INSERT INTO tournament_participant_state(
+-            tournament_id,player_id,team_id,losses,eliminated,updated_at
+-          ) VALUES(?,?,?,?,0,NOW())
+-        `, [tournament.id, participant.playerId, participant.teamId, 0]);
+-      }
+-      await createDoubleEliminationRound(connection, tournament, participants, 1);
+-    } else {
+-      await createKnockoutRound(connection, tournament, participants, 1, "دور اول");
+-    }
++export async function generateTournamentDraw(
++  tournamentId: number,
++  options: TournamentDrawOptions = {}
++) {
++  const connection = await db.getConnection();
++  try {
++    await connection.beginTransaction();
++    const tournament = await loadTournament(connection, tournamentId);
++    if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
++    const participants = await loadParticipants(connection, tournament.id);
++    const result = await createInitialDraw(connection, tournament, participants, options);
++    await connection.commit();
++    return result;
++  } catch (error) {
++    await connection.rollback();
++    throw error;
++  } finally {
++    connection.release();
++  }
++}
+ 
+-    await connection.execute(`
+-      UPDATE tournaments SET status='DRAW_READY',updated_at=NOW() WHERE id=?
+-    `, [tournament.id]);
++export async function resetTournamentDraw(tournamentId: number) {
++  const connection = await db.getConnection();
++  try {
++    await connection.beginTransaction();
++    const tournament = await loadTournament(connection, tournamentId);
++    if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
++    await resetDrawInTransaction(connection, tournament.id);
++    await connection.commit();
++    return { reset: true };
++  } catch (error) {
++    await connection.rollback();
++    throw error;
++  } finally {
++    connection.release();
++  }
++}
++
++export async function regenerateTournamentDraw(
++  tournamentId: number,
++  options: TournamentDrawOptions = {}
++) {
++  const connection = await db.getConnection();
++  try {
++    await connection.beginTransaction();
++    const tournament = await loadTournament(connection, tournamentId);
++    if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
++    await resetDrawInTransaction(connection, tournament.id);
++    tournament.status = "REGISTRATION_CLOSED";
++    const participants = await loadParticipants(connection, tournament.id);
++    const result = await createInitialDraw(connection, tournament, participants, options);
+     await connection.commit();
+-    return { participants: participants.length, category };
++    return { ...result, regenerated: true };
+   } catch (error) {
+     await connection.rollback();
+     throw error;
+@@ -653,23 +957,35 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+         WHERE tournament_id=? AND stage LIKE 'group_%'
+         ORDER BY stage
+       `, [tournament.id]);
+-      const groupWinners: Participant[] = [];
+-      const groupRunnersUp: Participant[] = [];
++      const settings = parseObject(tournament.game_settings);
++      const qualifiersPerGroup = Math.round(safeNumber(settings.groupQualifiers, 2, 1, 4));
++      const groupTables: Participant[][] = [];
+       for (const stageRow of stageRows) {
+         const table = await standingsFromMatches(connection, tournament.id, stageRow.stage);
+-        if (table[0]) groupWinners.push(table[0].participant);
+-        if (table[1]) groupRunnersUp.push(table[1].participant);
++        groupTables.push(table.slice(0, qualifiersPerGroup).map((standing) => standing.participant));
+       }
+       const qualified: Participant[] = [];
+-      if (groupWinners.length > 1 && groupRunnersUp.length === groupWinners.length) {
+-        for (let index = 0; index < groupWinners.length; index += 1) {
+-          qualified.push(groupWinners[index], groupRunnersUp[(index + 1) % groupRunnersUp.length]);
+-        }
+-      } else {
+-        qualified.push(...groupWinners, ...groupRunnersUp);
++      for (let rank = 0; rank < qualifiersPerGroup; rank += 1) {
++        const row = groupTables
++          .map((table) => table[rank])
++          .filter((participant): participant is Participant => Boolean(participant));
++        if (rank % 2) row.reverse();
++        qualified.push(...row);
+       }
+       if (qualified.length < 2) throw new Error("NOT_ENOUGH_QUALIFIED_PARTICIPANTS");
+-      await createKnockoutRound(connection, tournament, qualified, 1, "مرحله حذفی");
++      const knockoutPlan = planKnockout(qualified, "custom", {
++        participantOrder: qualified.map((participant) => participant.key)
++      });
++      await createKnockoutRound(
++        connection,
++        tournament,
++        qualified,
++        1,
++        "مرحله حذفی",
++        "knockout",
++        false,
++        knockoutPlan.pairings
++      );
+       return { advanced: true, completed: false };
+     }
+   }
+@@ -686,9 +1002,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+     const defaultRounds = Math.ceil(Math.log2(Math.max(2, participants.length))) + 1;
+     const maximumRounds = Math.round(safeNumber(settings.swissRounds, defaultRounds, 2, 20));
+     if (currentRound < maximumRounds) {
+-      const table = await standingsFromMatches(connection, tournament.id, "swiss");
+-      const ordered = table.length ? table.map((row) => row.participant) : participants;
+-      await createSwissRound(connection, tournament, ordered, currentRound + 1);
++      await createSwissRound(connection, tournament, participants, currentRound + 1);
+       return { advanced: true, completed: false };
+     }
+     await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+@@ -701,28 +1015,86 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+       player_id: number | null;
+       team_id: number | null;
+       losses: number;
++      seed: number | null;
+     }>>(`
+-      SELECT player_id,team_id,losses
+-      FROM tournament_participant_state
+-      WHERE tournament_id=? AND eliminated=0
+-      ORDER BY losses,updated_at
++      SELECT state.player_id,state.team_id,state.losses,re.seed
++      FROM tournament_participant_state state
++      LEFT JOIN registrations reg ON reg.tournament_id=state.tournament_id
++        AND reg.status IN ('CONFIRMED','CHECKED_IN') AND reg.deleted_at IS NULL
++      LEFT JOIN registration_entries re ON re.registration_id=reg.id
++        AND re.player_id<=>state.player_id AND re.team_id<=>state.team_id
++      WHERE state.tournament_id=? AND state.eliminated=0
++      GROUP BY state.id,state.player_id,state.team_id,state.losses,re.seed
++      ORDER BY state.losses,COALESCE(re.seed,999999),state.updated_at
+     `, [tournament.id]);
+     if (activeRows.length <= 1) {
+       await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+       return { advanced: true, completed: true };
+     }
+-    const [roundRows] = await connection.query<Array<RowDataPacket & { next_round: number }>>(`
+-      SELECT COALESCE(MAX(round_number),0)+1 AS next_round
+-      FROM tournament_rounds
+-      WHERE tournament_id=? AND stage='double_elimination'
+-    `, [tournament.id]);
++
+     const participants = activeRows.map((row): Participant => ({
+       playerId: row.player_id ? Number(row.player_id) : null,
+       teamId: row.team_id ? Number(row.team_id) : null,
+-      seed: null,
++      seed: row.seed === null ? null : Number(row.seed),
+       key: participantKey(row.player_id, row.team_id)
+     }));
+-    await createDoubleEliminationRound(connection, tournament, participants, Number(roundRows[0]?.next_round || 1));
++    const [roundMeta] = await connection.query<Array<RowDataPacket & {
++      next_round: number;
++      final_count: number;
++      reset_count: number;
++    }>>(`
++      SELECT COALESCE(MAX(round_number),0)+1 AS next_round,
++        SUM(stage='double_final') AS final_count,
++        SUM(stage='double_reset') AS reset_count
++      FROM tournament_rounds
++      WHERE tournament_id=? AND stage LIKE 'double_%'
++    `, [tournament.id]);
++    const nextRound = Number(roundMeta[0]?.next_round || 1);
++    const finalExists = Number(roundMeta[0]?.final_count || 0) > 0;
++    const resetExists = Number(roundMeta[0]?.reset_count || 0) > 0;
++
++    if (participants.length === 2) {
++      if (resetExists) throw new Error("DOUBLE_ELIMINATION_STATE_INVALID");
++      await createDoubleEliminationRound(
++        connection,
++        tournament,
++        participants,
++        nextRound,
++        finalExists ? "double_reset" : "double_final"
++      );
++      return { advanced: true, completed: false };
++    }
++
++    const winnerBracket = participants.filter((participant) => {
++      const state = activeRows.find((row) => participantKey(row.player_id, row.team_id) === participant.key);
++      return Number(state?.losses || 0) === 0;
++    });
++    const loserBracket = participants.filter((participant) => {
++      const state = activeRows.find((row) => participantKey(row.player_id, row.team_id) === participant.key);
++      return Number(state?.losses || 0) === 1;
++    });
++    let created = 0;
++    if (winnerBracket.length >= 2) {
++      await createDoubleEliminationRound(
++        connection,
++        tournament,
++        winnerBracket,
++        nextRound,
++        "double_winners"
++      );
++      created += 1;
++    }
++    if (loserBracket.length >= 2) {
++      await createDoubleEliminationRound(
++        connection,
++        tournament,
++        loserBracket,
++        nextRound,
++        "double_losers"
++      );
++      created += 1;
++    }
++    if (!created) throw new Error("DOUBLE_ELIMINATION_STATE_INVALID");
+     return { advanced: true, completed: false };
+   }
+ 

@@ -18,6 +18,7 @@ import {
   parsePlayerData
 } from "@/lib/registration-flow";
 import { sendRegistrationTrackingSms } from "@/lib/sms";
+import { assertPaymentMethodEnabled } from "@/lib/runtime-settings";
 
 const paymentDetailsSchema = z.object({
   payerName: z.string().trim().min(2).max(120),
@@ -48,6 +49,7 @@ type HoldRow = RowDataPacket & {
   contact_mobile: string;
   player_data: unknown;
   team_title: string | null;
+  existing_team_id: number | null;
   participant_type: "INDIVIDUAL" | "TEAM";
   slots: number;
   amount: number;
@@ -71,6 +73,45 @@ type DuplicatePaymentRow = RowDataPacket & {
   id: number;
 };
 
+type OwnedTeamRow = RowDataPacket & { id: number; title: string };
+type OwnedTeamMemberRow = RowDataPacket & {
+  player_id: number;
+  name: string;
+  mobile: string | null;
+};
+
+async function loadOwnedTeamForRegistration(
+  connection: import("mysql2/promise").PoolConnection,
+  teamId: number,
+  userId: number
+) {
+  const [teams] = await connection.query<OwnedTeamRow[]>(`
+    SELECT t.id,t.title
+    FROM teams t
+    JOIN team_members captain ON captain.team_id=t.id AND captain.is_captain=1
+    JOIN players captain_player ON captain_player.id=captain.player_id
+    WHERE t.id=? AND captain_player.user_id=?
+    LIMIT 1
+    FOR UPDATE
+  `, [teamId, userId]);
+  if (!teams[0]) return null;
+
+  const [members] = await connection.query<OwnedTeamMemberRow[]>(`
+    SELECT tm.player_id,p.name,p.mobile
+    FROM team_members tm
+    JOIN players p ON p.id=tm.player_id
+    WHERE tm.team_id=?
+    ORDER BY tm.is_captain DESC,tm.joined_at,tm.player_id
+    FOR UPDATE
+  `, [teamId]);
+
+  if (members.some((member) => !member.mobile || !/^09\d{9}$/.test(member.mobile))) {
+    throw new Error("TEAM_MEMBER_MOBILE_REQUIRED");
+  }
+
+  return { team: teams[0], members };
+}
+
 function isReasonablePaymentDate(value: string) {
   const date = new Date(`${value}T12:00:00`);
   if (Number.isNaN(date.getTime())) return false;
@@ -86,6 +127,7 @@ function isReasonablePaymentDate(value: string) {
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
+    await assertPaymentMethodEnabled(input.payment);
     const user = await getSession();
 
     if (!user || !/^\d+$/.test(user.id) || !user.mobile) {
@@ -113,7 +155,7 @@ export async function POST(request: Request) {
     try {
       const [preliminaryRows] = await connection.query<HoldRow[]>(`
         SELECT id,tournament_id,user_id,contact_mobile,player_data,team_title,
-               participant_type,slots,amount,status,expires_at
+               existing_team_id,participant_type,slots,amount,status,expires_at
         FROM registration_holds
         WHERE hold_token=? AND user_id=?
         LIMIT 1
@@ -139,7 +181,7 @@ export async function POST(request: Request) {
 
       const [holdRows] = await connection.query<HoldRow[]>(`
         SELECT id,tournament_id,user_id,contact_mobile,player_data,team_title,
-               participant_type,slots,amount,status,expires_at
+               existing_team_id,participant_type,slots,amount,status,expires_at
         FROM registration_holds
         WHERE hold_token=? AND user_id=?
         LIMIT 1
@@ -182,7 +224,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
       }
 
-      if (!["PUBLISHED", "REGISTRATION_OPEN"].includes(tournament.status)) {
+      if (tournament.status !== "REGISTRATION_OPEN") {
         await connection.rollback();
         return NextResponse.json({ message: "ثبت‌نام این مسابقه فعال نیست." }, { status: 409 });
       }
@@ -238,8 +280,14 @@ export async function POST(request: Request) {
               AND status='ACTIVE'
               AND expires_at>NOW()
               AND id<>?
+          )
+          +
+          (
+            SELECT COALESCE(SUM(slots),0)
+            FROM waitlist_entries
+            WHERE tournament_id=? AND status='OFFERED' AND offer_expires_at>NOW()
           ) AS occupied_slots
-      `, [hold.tournament_id, hold.tournament_id, hold.id]);
+      `, [hold.tournament_id, hold.tournament_id, hold.id, hold.tournament_id]);
 
       if (Number(countRows[0]?.occupied_slots || 0) + Number(hold.slots) > Number(tournament.capacity)) {
         await connection.rollback();
@@ -307,34 +355,54 @@ export async function POST(request: Request) {
         hold.id
       ]);
 
-      const playerIds: number[] = [];
-      for (const player of players) {
-        playerIds.push(await findOrCreateGuestPlayer(connection, player));
-      }
-
       if (hold.participant_type === "TEAM") {
-        const [teamResult] = await connection.execute<ResultSetHeader>(`
-          INSERT INTO teams(public_id,title,created_by_id,created_at,updated_at)
-          VALUES(?,?,?,NOW(),NOW())
-        `, [
-          randomUUID(),
-          hold.team_title || `تیم ${players[0].name}`,
-          userId
-        ]);
+        let teamId = hold.existing_team_id ? Number(hold.existing_team_id) : 0;
 
-        for (let index = 0; index < playerIds.length; index += 1) {
-          await connection.execute(`
-            INSERT INTO team_members(team_id,player_id,is_captain,joined_at)
-            VALUES(?,?,?,NOW())
-          `, [teamResult.insertId, playerIds[index], index === 0 ? 1 : 0]);
+        if (teamId) {
+          const ownedTeam = await loadOwnedTeamForRegistration(connection, teamId, userId);
+          if (!ownedTeam) {
+            await connection.rollback();
+            return NextResponse.json({ message: "دیگر اجازه ثبت‌نام این تیم را ندارید." }, { status: 409 });
+          }
+
+          const currentMobiles = ownedTeam.members.map((member) => member.mobile!);
+          if (JSON.stringify(currentMobiles) !== JSON.stringify(players.map((player) => player.mobile))) {
+            await connection.rollback();
+            return NextResponse.json({
+              message: "ترکیب تیم پس از رزرو ظرفیت تغییر کرده است. دوباره ظرفیت را رزرو کنید."
+            }, { status: 409 });
+          }
+        } else {
+          const playerIds: number[] = [];
+          for (const player of players) {
+            playerIds.push(await findOrCreateGuestPlayer(connection, player));
+          }
+
+          const [teamResult] = await connection.execute<ResultSetHeader>(`
+            INSERT INTO teams(public_id,title,created_by_id,created_at,updated_at)
+            VALUES(?,?,?,NOW(),NOW())
+          `, [
+            randomUUID(),
+            hold.team_title || `تیم ${players[0].name}`,
+            userId
+          ]);
+          teamId = teamResult.insertId;
+
+          for (let index = 0; index < playerIds.length; index += 1) {
+            await connection.execute(`
+              INSERT INTO team_members(team_id,player_id,is_captain,joined_at)
+              VALUES(?,?,?,NOW())
+            `, [teamId, playerIds[index], index === 0 ? 1 : 0]);
+          }
         }
 
         await connection.execute(`
           INSERT INTO registration_entries(registration_id,team_id,confirmed_at)
           VALUES(?,?,NULL)
-        `, [registrationResult.insertId, teamResult.insertId]);
+        `, [registrationResult.insertId, teamId]);
       } else {
-        for (const playerId of playerIds) {
+        for (const player of players) {
+          const playerId = await findOrCreateGuestPlayer(connection, player);
           await connection.execute(`
             INSERT INTO registration_entries(registration_id,player_id,confirmed_at)
             VALUES(?,?,NULL)
@@ -479,6 +547,10 @@ export async function POST(request: Request) {
       connection.release();
     }
   } catch (error) {
+    if (error instanceof Error && error.message === "PAYMENT_METHOD_DISABLED") {
+      return NextResponse.json({ message: "این روش پرداخت در حال حاضر غیرفعال است." }, { status: 409 });
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json({
         message: "اطلاعات ثبت‌نام نامعتبر است.",
@@ -490,6 +562,12 @@ export async function POST(request: Request) {
       return NextResponse.json({
         message: "درخواست دیگری برای این شماره در حال پردازش است. دوباره تلاش کنید."
       }, { status: 409 });
+    }
+
+    if (error instanceof Error && error.message === "TEAM_MEMBER_MOBILE_REQUIRED") {
+      return NextResponse.json({
+        message: "همه اعضای تیم باید شماره موبایل معتبر داشته باشند."
+      }, { status: 422 });
     }
 
     console.error("registration.create.failed", error);

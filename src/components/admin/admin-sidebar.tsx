@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Contact, CopyPlus, Images, LayoutDashboard, Menu, Settings, Swords, Trophy, Users, WalletCards, X } from "lucide-react";
+import { Contact, CopyPlus, Images, LayoutDashboard, ListOrdered, Menu, Scale, Settings, Swords, Trophy, Users, WalletCards, X } from "lucide-react";
 import { useState } from "react";
 import { Logo } from "@/components/layout/logo";
 import { LogoutButton } from "@/components/layout/logout-button";
@@ -10,15 +10,17 @@ import { Button } from "@/components/ui/button";
 import { adminNavigation } from "@/config/admin-navigation";
 import { cn } from "@/lib/utils";
 
-const iconMap = { LayoutDashboard, Trophy, CopyPlus, Contact, Users, Swords, WalletCards, Images, Settings };
+const iconMap = { LayoutDashboard, Trophy, CopyPlus, ListOrdered, Contact, Users, Swords, Scale, WalletCards, Images, Settings };
 
 const requiredPermissionByHref: Record<string, string> = {
   "/admin": "tournaments.view",
   "/admin/tournaments": "tournaments.view",
   "/admin/templates": "templates.manage",
+  "/admin/waitlist": "tournaments.manage",
   "/admin/players": "players.view",
   "/admin/participants": "checkin.manage",
   "/admin/matches": "results.submit",
+  "/admin/disputes": "matches.manage",
   "/admin/payments": "payments.view",
   "/admin/content": "content.manage",
   "/admin/settings": "settings.manage"

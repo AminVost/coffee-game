@@ -5,6 +5,7 @@ import type { RowDataPacket } from "mysql2";
 import { execute, queryRows } from "@/lib/db";
 import { assertAuthConfiguration, env } from "@/lib/env";
 import { getRequestIp, getRequestUserAgent } from "@/lib/request-context";
+import { getRuntimeSettings } from "@/lib/runtime-settings";
 
 export type SessionUser = {
   id: string;
@@ -34,7 +35,6 @@ function authKey() {
   return new TextEncoder().encode(env.authSecret);
 }
 const cookieName = "cgs_session";
-const sessionSeconds = 60 * 60 * 24 * env.sessionDays;
 
 function hashSessionId(sessionId: string) {
   return createHash("sha256").update(sessionId).digest("hex");
@@ -87,13 +87,15 @@ async function createSessionToken(user: SessionUser) {
   return new SignJWT({ ...user })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime(`${env.sessionDays}d`)
+    .setExpirationTime(`${(await getRuntimeSettings()).auth.sessionDays}d`)
     .sign(authKey());
 }
 
 export async function setSession(user: SessionUser, request?: Request) {
   const sessionId = randomUUID();
   const tokenHash = hashSessionId(sessionId);
+  const sessionDays = (await getRuntimeSettings()).auth.sessionDays;
+  const sessionSeconds = 60 * 60 * 24 * sessionDays;
   const expiresAt = new Date(Date.now() + sessionSeconds * 1000);
 
   await execute(`

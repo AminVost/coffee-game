@@ -1,6 +1,8 @@
 import { randomBytes } from "crypto";
 import type { PoolConnection } from "mysql2/promise";
+import type { RowDataPacket } from "mysql2";
 import { db } from "@/lib/db";
+import { expireWaitlistOffers, offerNextWaitlistEntries } from "@/lib/waitlist";
 
 export type RegistrationPlayerInput = {
   name: string;
@@ -96,6 +98,28 @@ export function parsePlayerData(value: unknown): RegistrationPlayerInput[] {
 }
 
 export async function expireStaleRegistrationState(connection: PoolConnection) {
+  const [affectedRows] = await connection.query<Array<RowDataPacket & { tournament_id: number }>>(`
+    SELECT tournament_id
+    FROM registration_holds
+    WHERE status='ACTIVE' AND expires_at<=NOW()
+    UNION
+    SELECT r.tournament_id
+    FROM registrations r
+    JOIN payments p ON p.registration_id=r.id
+    WHERE (
+      p.status='NEEDS_CORRECTION'
+      AND p.correction_expires_at IS NOT NULL
+      AND p.correction_expires_at<=NOW()
+      AND r.status='NEEDS_CORRECTION'
+    ) OR (
+      p.status='PENDING'
+      AND p.method IN ('pos','cash')
+      AND r.status='PENDING_PAYMENT'
+      AND r.reserved_until IS NOT NULL
+      AND r.reserved_until<=NOW()
+    )
+  `);
+
   await connection.execute(`
     UPDATE registration_holds
     SET status='EXPIRED',updated_at=NOW()
@@ -130,6 +154,14 @@ export async function expireStaleRegistrationState(connection: PoolConnection) {
       AND r.reserved_until IS NOT NULL
       AND r.reserved_until<=NOW()
   `);
+
+  const expiredWaitlistOffers = await expireWaitlistOffers(connection);
+  const affectedTournaments = [...new Set(affectedRows.map((row) => Number(row.tournament_id)))];
+  for (const tournamentId of affectedTournaments) {
+    await offerNextWaitlistEntries(connection, tournamentId);
+  }
+
+  return { affectedTournaments, expiredWaitlistOffers };
 }
 
 

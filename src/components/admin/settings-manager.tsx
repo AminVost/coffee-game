@@ -13,8 +13,10 @@ import { Textarea } from "@/components/ui/textarea";
 
 type Settings = {
   club: { name: string; phone: string; address: string };
-  auth: { admin2fa: "optional" | "required" };
-  payment: { cash: boolean; receipt: boolean; partial: boolean };
+  auth: { admin2fa: "optional" | "required"; sessionDays: number };
+  otp: { ttlMinutes: number; cooldownSeconds: number; hourlyLimit: number; ipHourlyLimit: number; maxAttempts: number };
+  registration: { holdMinutes: number; correctionHours: number; waitlistOfferMinutes: number };
+  payment: { cash: boolean; pos: boolean; receipt: boolean; partial: boolean };
   notification: { inApp: boolean; email: boolean; sms: "disabled" | "optional" | "required" };
 };
 
@@ -60,10 +62,15 @@ export function SettingsManager() {
       <Card className="p-6">
         <h2 className="flex items-center gap-2 font-black"><ShieldCheck className="text-[var(--brand)]" />امنیت و سرویس‌ها</h2>
         <div className="mt-5 grid gap-4">
-          <Label>ورود دومرحله‌ای مدیر<SelectField value={settings.auth.admin2fa} onValueChange={(value) => setSettings({ ...settings, auth: { admin2fa: value as Settings["auth"]["admin2fa"] } })} options={[{ value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>
-          <ToggleRow label="پرداخت حضوری (کارتخوان یا نقدی)" checked={settings.payment.cash} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, cash: checked } })} />
+          <Label>ورود دومرحله‌ای مدیر<SelectField value={settings.auth.admin2fa} onValueChange={(value) => setSettings({ ...settings, auth: { ...settings.auth, admin2fa: value as Settings["auth"]["admin2fa"] } })} options={[{ value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>
+          <Label>اعتبار نشست (روز)<Input type="number" min="1" max="90" value={settings.auth.sessionDays} onChange={(event) => setSettings({ ...settings, auth: { ...settings.auth, sessionDays: Number(event.target.value) } })} /></Label>
+          <div className="grid grid-cols-2 gap-3"><Label>مهلت Hold (دقیقه)<Input type="number" min="5" max="120" value={settings.registration.holdMinutes} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, holdMinutes: Number(event.target.value) } })} /></Label><Label>مهلت اصلاح (ساعت)<Input type="number" min="1" max="168" value={settings.registration.correctionHours} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, correctionHours: Number(event.target.value) } })} /></Label><Label>مهلت پیشنهاد صف (دقیقه)<Input type="number" min="5" max="1440" value={settings.registration.waitlistOfferMinutes} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, waitlistOfferMinutes: Number(event.target.value) } })} /></Label><Label>اعتبار OTP (دقیقه)<Input type="number" min="2" max="30" value={settings.otp.ttlMinutes} onChange={(event) => setSettings({ ...settings, otp: { ...settings.otp, ttlMinutes: Number(event.target.value) } })} /></Label></div>
+          <ToggleRow label="پرداخت نقدی حضوری" checked={settings.payment.cash} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, cash: checked } })} />
+          <ToggleRow label="پرداخت با کارتخوان حضوری" checked={settings.payment.pos} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, pos: checked } })} />
           <ToggleRow label="انتقال بانکی و رسید اختیاری" checked={settings.payment.receipt} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, receipt: checked } })} />
           <ToggleRow label="اعلان داخل برنامه" checked={settings.notification.inApp} onCheckedChange={(checked) => setSettings({ ...settings, notification: { ...settings.notification, inApp: checked } })} />
+          <ToggleRow label="اعلان ایمیلی" checked={settings.notification.email} onCheckedChange={(checked) => setSettings({ ...settings, notification: { ...settings.notification, email: checked } })} />
+          <Label>سیاست پیامک<SelectField value={settings.notification.sms} onValueChange={(value) => setSettings({ ...settings, notification: { ...settings.notification, sms: value as Settings["notification"]["sms"] } })} options={[{value:"disabled",label:"غیرفعال"},{value:"optional",label:"اختیاری"},{value:"required",label:"اجباری"}]} /></Label>
           <Alert tone="warning" className="text-xs font-normal">کلیدهای SMS.ir فقط از فایل env سرور خوانده می‌شوند. فعال‌بودن اعلان داخل برنامه و روش‌های پرداخت از این بخش مدیریت می‌شود.</Alert>
         </div>
       </Card>

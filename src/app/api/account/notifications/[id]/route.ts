@@ -1,0 +1,5 @@
+import { NextResponse } from "next/server";
+import { getSession } from "@/lib/auth";
+import { execute } from "@/lib/db";
+export async function PATCH(_:Request,{params}:{params:Promise<{id:string}>}){const user=await getSession();if(!user)return NextResponse.json({message:"ابتدا وارد حساب شوید."},{status:401});const {id}=await params;const result=await execute(`UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE id=? AND user_id=?`,[id,user.id]);return result.affectedRows?NextResponse.json({ok:true}):NextResponse.json({message:"اعلان یافت نشد."},{status:404});}
+export async function DELETE(_:Request,{params}:{params:Promise<{id:string}>}){const user=await getSession();if(!user)return NextResponse.json({message:"ابتدا وارد حساب شوید."},{status:401});const {id}=await params;const result=await execute(`DELETE FROM notifications WHERE id=? AND user_id=?`,[id,user.id]);return result.affectedRows?NextResponse.json({ok:true}):NextResponse.json({message:"اعلان یافت نشد."},{status:404});}

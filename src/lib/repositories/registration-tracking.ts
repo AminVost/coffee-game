@@ -117,10 +117,10 @@ export async function findRegistrationTracking(tokenOrCode: string): Promise<Pub
     JOIN tournaments t ON t.id=r.tournament_id
     LEFT JOIN venues v ON v.id=t.venue_id
     LEFT JOIN payments p ON p.registration_id=r.id
-    WHERE r.tracking_token=? OR r.tracking_code=?
+    WHERE r.tracking_token=?
     ORDER BY p.id DESC
     LIMIT 1
-  `, [tokenOrCode, tokenOrCode.toUpperCase()]);
+  `, [tokenOrCode]);
 
   const row = rows[0];
   if (!row) return null;

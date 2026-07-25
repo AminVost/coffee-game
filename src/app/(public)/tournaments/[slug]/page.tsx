@@ -17,6 +17,7 @@ import { getSession } from "@/lib/auth";
 import { queryRows } from "@/lib/db";
 import { findTournament } from "@/lib/repositories/tournaments";
 import { formatToman } from "@/lib/utils";
+import { getRuntimeSettings } from "@/lib/runtime-settings";
 
 
 type TournamentMatchRow = RowDataPacket & {
@@ -38,9 +39,10 @@ export default async function TournamentDetail({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const [item, user] = await Promise.all([
+  const [item, user, runtimeSettings] = await Promise.all([
     findTournament(slug),
-    getSession()
+    getSession(),
+    getRuntimeSettings()
   ]);
 
   if (!item) notFound();
@@ -168,6 +170,7 @@ export default async function TournamentDetail({
             <RegisterTournamentForm
               tournament={item}
               initialUser={user ? { name: user.name, mobile: user.mobile } : null}
+              paymentSettings={runtimeSettings.payment}
             />
           </Card>
           <Button variant="secondary"><Share2 size={17} />اشتراک‌گذاری مسابقه</Button>

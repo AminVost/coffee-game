@@ -22,6 +22,8 @@ export function LoginForm() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [tab, setTab] = useState<"password" | "sms">("password");
+  const [adminChallenge, setAdminChallenge] = useState("");
+  const [adminMobile, setAdminMobile] = useState("");
 
   async function submitPassword(event: React.FormEvent) {
     event.preventDefault();
@@ -36,6 +38,13 @@ export function LoginForm() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || "ورود انجام نشد.");
+      if (data.requiresOtp && data.challengeToken) {
+        setAdminChallenge(data.challengeToken);
+        setAdminMobile(data.mobile || "شماره ثبت‌شده");
+        setCode("");
+        setMessage(data.developmentCode ? `کد توسعه: ${data.developmentCode}` : "کد تأیید ورود مدیر ارسال شد.");
+        return;
+      }
       router.push(data.role === "admin" ? "/admin" : "/account");
       router.refresh();
     } catch (caught) {
@@ -43,6 +52,22 @@ export function LoginForm() {
     } finally {
       setLoading(false);
     }
+  }
+
+
+  async function submitAdminOtp(event: React.FormEvent) {
+    event.preventDefault();
+    setLoading(true); setError("");
+    try {
+      const response = await fetch("/api/auth/admin-2fa/verify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeToken: adminChallenge, code })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "تأیید ورود انجام نشد.");
+      router.push("/admin"); router.refresh();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "تأیید ورود انجام نشد."); }
+    finally { setLoading(false); }
   }
 
   async function requestCode() {
@@ -83,7 +108,7 @@ export function LoginForm() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || "کد تایید نادرست است.");
-      router.push("/account");
+      router.push(data.role === "admin" ? "/admin" : "/account");
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "تایید کد انجام نشد.");
@@ -98,6 +123,17 @@ export function LoginForm() {
     setError("");
     setMessage("");
   }
+
+  if (adminChallenge) return (
+    <form onSubmit={submitAdminOtp} className="grid gap-5">
+      <Alert tone="warning">ورود دومرحله‌ای مدیر برای {adminMobile}</Alert>
+      <Label>کد تأیید شش‌رقمی<Input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} dir="ltr" inputMode="numeric" pattern="[0-9]{6}" className="text-center text-lg tracking-[.45em]" required autoFocus /></Label>
+      {message && <Alert tone="success">{message}</Alert>}
+      {error && <Alert tone="error">{error}</Alert>}
+      <Button type="submit" size="lg" loading={loading} loadingText="در حال تأیید...">تأیید و ورود مدیر</Button>
+      <Button type="button" variant="ghost" onClick={() => { setAdminChallenge(""); setCode(""); setMessage(""); setError(""); }}>بازگشت به ورود</Button>
+    </form>
+  );
 
   return (
     <div>

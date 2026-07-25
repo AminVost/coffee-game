@@ -5,7 +5,9 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
+  Edit3,
   Eye,
+  Save,
   Search,
   ShieldCheck,
   Trophy,
@@ -19,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { SelectField } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
@@ -131,7 +134,7 @@ function PlayerAvatar({ player, size = "md" }: { player: PlayerItem; size?: "md"
   </span>;
 }
 
-function PlayerDetails({ player, onClose }: { player: PlayerItem; onClose: () => void }) {
+function PlayerDetails({ player, onClose, onEdit }: { player: PlayerItem; onClose: () => void; onEdit?: () => void }) {
   const details = [
     ["شماره بازیکن", player.id],
     ["شماره حساب کاربری", player.userId || "ندارد"],
@@ -167,9 +170,10 @@ function PlayerDetails({ player, onClose }: { player: PlayerItem; onClose: () =>
             </div>
           </div>
         </div>
-        <Button type="button" onClick={onClose} variant="secondary" size="iconSm" aria-label="بستن">
-          <X size={18}/>
-        </Button>
+        <div className="flex gap-2">
+          {onEdit && <Button type="button" onClick={onEdit} variant="secondary" size="sm"><Edit3 size={15}/>ویرایش</Button>}
+          <Button type="button" onClick={onClose} variant="secondary" size="iconSm" aria-label="بستن"><X size={18}/></Button>
+        </div>
       </div>
 
       <div className="mt-7 grid gap-3 sm:grid-cols-2">
@@ -182,7 +186,13 @@ function PlayerDetails({ player, onClose }: { player: PlayerItem; onClose: () =>
   </div>;
 }
 
-export function PlayersManager() {
+function PlayerEditDialog({ player, onClose, onSaved }: { player: PlayerItem; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [name,setName]=useState(player.name);const [mobile,setMobile]=useState(player.mobile||"");const [email,setEmail]=useState(player.email||"");const [avatarUrl,setAvatarUrl]=useState(player.avatarUrl||"");const [accountStatus,setAccountStatus]=useState(["ACTIVE","PENDING","SUSPENDED"].includes(player.accountStatus)?player.accountStatus:"ACTIVE");const [saving,setSaving]=useState(false);const [error,setError]=useState("");
+  async function save(){setSaving(true);setError("");const response=await fetch(`/api/admin/players/${player.id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,mobile,email,avatarUrl,status:player.userId?accountStatus:undefined})});const payload=await response.json();setSaving(false);if(!response.ok)return setError(payload.message||"ویرایش انجام نشد.");await onSaved();onClose()}
+  return <div className="fixed inset-0 z-[90] grid place-items-center bg-black/65 p-4"><Card className="w-full max-w-xl p-6"><div className="flex items-center justify-between"><h2 className="text-xl font-black">ویرایش بازیکن</h2><Button type="button" variant="secondary" size="iconSm" onClick={onClose}><X size={18}/></Button></div><div className="mt-6 grid gap-4 sm:grid-cols-2"><Label>نام<Input value={name} onChange={e=>setName(e.target.value)}/></Label><Label>موبایل<Input dir="ltr" value={mobile} onChange={e=>setMobile(e.target.value.replace(/\D/g,"").slice(0,11))}/></Label><Label>ایمیل<Input dir="ltr" type="email" value={email} onChange={e=>setEmail(e.target.value)}/></Label><Label>تصویر<Input dir="ltr" value={avatarUrl} onChange={e=>setAvatarUrl(e.target.value)}/></Label>{player.userId&&<Label>وضعیت<SelectField value={accountStatus} onValueChange={setAccountStatus} options={[{value:"ACTIVE",label:"فعال"},{value:"PENDING",label:"در انتظار"},{value:"SUSPENDED",label:"مسدود"}]}/></Label>}</div>{error&&<Alert tone="error" className="mt-4">{error}</Alert>}<div className="mt-6 flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>انصراف</Button><Button type="button" onClick={save} loading={saving}><Save size={16}/>ذخیره</Button></div></Card></div>
+}
+
+export function PlayersManager({ canManage = false }: { canManage?: boolean }) {
   const [items, setItems] = useState<PlayerItem[]>([]);
   const [overview, setOverview] = useState<Overview>(emptyOverview);
   const [pagination, setPagination] = useState<Pagination>(emptyPagination);
@@ -194,6 +204,8 @@ export function PlayersManager() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<PlayerItem | null>(null);
+  const [editing, setEditing] = useState<PlayerItem | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -244,7 +256,7 @@ export function PlayersManager() {
 
     void load();
     return () => controller.abort();
-  }, [debouncedSearch, type, status, page]);
+  }, [debouncedSearch, type, status, page, reloadKey]);
 
   const rangeText = useMemo(() => {
     if (!pagination.total) return "۰ بازیکن";
@@ -392,6 +404,7 @@ export function PlayersManager() {
       </div>
     </Card>
 
-    {selected && <PlayerDetails player={selected} onClose={() => setSelected(null)}/>}
+    {selected && <PlayerDetails player={selected} onClose={() => setSelected(null)} onEdit={canManage?()=>{setEditing(selected);setSelected(null)}:undefined}/>}
+    {editing && <PlayerEditDialog player={editing} onClose={()=>setEditing(null)} onSaved={async()=>{setReloadKey(v=>v+1)}}/>}
   </>;
 }

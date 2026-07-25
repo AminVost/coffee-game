@@ -3,6 +3,7 @@ import { StatCard } from "@/components/admin/stat-card";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getAdminDashboardData } from "@/lib/repositories/admin-dashboard";
+import { requireAdminPage } from "@/lib/page-authorization";
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("fa-IR", {
@@ -12,6 +13,7 @@ function formatDate(value: string) {
 }
 
 export default async function AdminDashboard() {
+  await requireAdminPage("tournaments.view");
   const data = await getAdminDashboardData();
 
   return (

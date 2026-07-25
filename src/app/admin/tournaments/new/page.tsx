@@ -1,10 +1,12 @@
 import { TournamentBuilder } from "@/components/admin/tournament-builder";
+import { requireAdminPage } from "@/lib/page-authorization";
 
 export default async function NewTournament({
   searchParams
 }: {
   searchParams: Promise<{ template?: string }>;
 }) {
+  await requireAdminPage("tournaments.manage");
   const { template } = await searchParams;
   const templateId = template && /^\d+$/.test(template) ? Number(template) : undefined;
 

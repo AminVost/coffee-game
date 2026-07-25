@@ -1,6 +1,8 @@
 import { PaymentsManager } from "@/components/admin/payments-manager";
+import { requireAdminPage } from "@/lib/page-authorization";
 
-export default function Payments() {
+export default async function Payments() {
+  await requireAdminPage("payments.view");
   return <div>
     <p className="section-kicker">PAYMENT INBOX</p>
     <h1 className="section-title mt-2">صندوق پرداخت‌ها</h1>

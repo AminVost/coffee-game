@@ -15,6 +15,7 @@ type HoldRow = RowDataPacket & {
   contact_mobile: string;
   player_data: unknown;
   team_title: string | null;
+  existing_team_id: number | null;
   participant_type: "INDIVIDUAL" | "TEAM";
   slots: number;
   amount: number;
@@ -63,6 +64,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tok
     contactMobile: hold.contact_mobile,
     players: parsePlayerData(hold.player_data),
     teamTitle: hold.team_title,
+    existingTeamId: hold.existing_team_id ? String(hold.existing_team_id) : null,
     participantType: hold.participant_type,
     slots: Number(hold.slots),
     amount: Number(hold.amount),

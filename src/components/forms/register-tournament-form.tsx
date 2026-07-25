@@ -25,6 +25,13 @@ import { formatToman } from "@/lib/utils";
 import type { Tournament } from "@/types";
 
 type PlayerInput = { name: string; mobile: string };
+type ExistingTeam = {
+  id: string;
+  title: string;
+  memberCount: number;
+  isCaptain: boolean;
+  members: Array<{ playerId: string; name: string; mobile: string | null; isCaptain: boolean }>;
+};
 type PaymentMethod = "card_to_card" | "pos" | "cash";
 type Step = "details" | "otp" | "payment" | "success" | "expired";
 
@@ -68,10 +75,12 @@ function formatRemaining(totalSeconds: number) {
 
 export function RegisterTournamentForm({
   tournament,
-  initialUser
+  initialUser,
+  paymentSettings
 }: {
   tournament: Tournament;
   initialUser?: { name?: string; mobile?: string } | null;
+  paymentSettings: { cardToCard: boolean; pos: boolean; cash: boolean };
 }) {
   const teamSize = useMemo(() => {
     const match = tournament.participantMode.match(/تیمی\s+(\d+)/);
@@ -86,6 +95,8 @@ export function RegisterTournamentForm({
     }))
   );
   const [teamTitle, setTeamTitle] = useState("");
+  const [existingTeams, setExistingTeams] = useState<ExistingTeam[]>([]);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("details");
   const [contactMobile, setContactMobile] = useState(initialUser?.mobile || "");
   const [otpCode, setOtpCode] = useState("");
@@ -93,7 +104,12 @@ export function RegisterTournamentForm({
   const [hold, setHold] = useState<HoldState | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
-  const [payment, setPayment] = useState<PaymentMethod>("card_to_card");
+  const enabledPaymentOptions = paymentOptions.filter((option) => (
+    option.value === "card_to_card" ? paymentSettings.cardToCard :
+    option.value === "pos" ? paymentSettings.pos : paymentSettings.cash
+  ));
+  const defaultPayment = (enabledPaymentOptions[0]?.value || "card_to_card") as PaymentMethod;
+  const [payment, setPayment] = useState<PaymentMethod>(defaultPayment);
   const [payerName, setPayerName] = useState(initialUser?.name || "");
   const [cardLast4, setCardLast4] = useState("");
   const [bankTrackingCode, setBankTrackingCode] = useState("");
@@ -105,9 +121,25 @@ export function RegisterTournamentForm({
   const [loading, setLoading] = useState(false);
   const [copyDone, setCopyDone] = useState("");
   const [error, setError] = useState("");
+  const [waitlistAvailable, setWaitlistAvailable] = useState(false);
+  const [waitlistJoined, setWaitlistJoined] = useState(false);
 
   const totalAmount = tournament.price * (isTeam ? 1 : players.length);
   const holdStorageKey = `cgs-registration-hold-${tournament.id}`;
+
+  useEffect(() => {
+    if (!isTeam || !initialUser?.mobile) return;
+
+    void fetch("/api/teams", { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.message || "دریافت تیم‌ها انجام نشد.");
+        setExistingTeams((payload.items || []).filter((team: ExistingTeam) => team.isCaptain));
+      })
+      .catch((caught) => {
+        console.error("registration.teams.load.failed", caught);
+      });
+  }, [initialUser?.mobile, isTeam]);
 
   useEffect(() => {
     if (!initialUser?.mobile) return;
@@ -134,6 +166,7 @@ export function RegisterTournamentForm({
 
         setPlayers(payload.players || players);
         setTeamTitle(payload.teamTitle || "");
+        setSelectedTeamId(payload.existingTeamId || null);
         setContactMobile(payload.contactMobile || initialUser.mobile || "");
         setHold({
           token: payload.holdToken,
@@ -176,6 +209,28 @@ export function RegisterTournamentForm({
     )));
   }
 
+  function selectExistingTeam(value: string) {
+    if (value === "new") {
+      setSelectedTeamId(null);
+      setTeamTitle("");
+      setPlayers(Array.from({ length: teamSize }, (_, index) => ({
+        name: index === 0 ? initialUser?.name || "" : "",
+        mobile: index === 0 ? initialUser?.mobile || "" : ""
+      })));
+      return;
+    }
+
+    const teamId = value.replace(/^team:/, "");
+    const team = existingTeams.find((item) => item.id === teamId);
+    if (!team || team.memberCount !== teamSize) return;
+    setSelectedTeamId(team.id);
+    setTeamTitle(team.title);
+    setPlayers(team.members.map((member) => ({
+      name: member.name,
+      mobile: member.mobile || ""
+    })));
+  }
+
   function validateInitialDetails() {
     if (isTeam && teamTitle.trim().length < 2) {
       return "نام تیم را وارد کنید.";
@@ -199,6 +254,7 @@ export function RegisterTournamentForm({
   async function createHold() {
     setLoading(true);
     setError("");
+    setWaitlistAvailable(false);
 
     try {
       const response = await fetch("/api/registration-holds", {
@@ -207,7 +263,8 @@ export function RegisterTournamentForm({
         body: JSON.stringify({
           tournamentId: tournament.id,
           players,
-          teamTitle: isTeam ? teamTitle : undefined
+          teamTitle: isTeam ? teamTitle : undefined,
+          teamId: selectedTeamId || undefined
         })
       });
       const payload = await response.json();
@@ -217,6 +274,7 @@ export function RegisterTournamentForm({
           setStep("otp");
           throw new Error(payload.message || "شماره موبایل خود را تایید کنید.");
         }
+        if (payload.waitlistAvailable) setWaitlistAvailable(true);
         throw new Error(payload.message || "رزرو موقت ظرفیت انجام نشد.");
       }
 
@@ -232,6 +290,33 @@ export function RegisterTournamentForm({
       setStep("payment");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "رزرو موقت ظرفیت انجام نشد.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+
+  async function joinWaitlist() {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/waitlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tournamentId: Number(tournament.id),
+          players,
+          teamTitle: isTeam ? teamTitle : undefined,
+          teamId: selectedTeamId || undefined,
+          paymentMethod: payment
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || "ورود به صف انتظار انجام نشد.");
+      setWaitlistJoined(true);
+      setWaitlistAvailable(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "ورود به صف انتظار انجام نشد.");
     } finally {
       setLoading(false);
     }
@@ -612,7 +697,7 @@ export function RegisterTournamentForm({
           <SelectField
             value={payment}
             onValueChange={(value) => setPayment(value as PaymentMethod)}
-            options={paymentOptions}
+            options={enabledPaymentOptions}
           />
         </Label>
 
@@ -753,15 +838,37 @@ export function RegisterTournamentForm({
       </div>
 
       {isTeam && (
-        <Label>
-          نام تیم
-          <Input
-            value={teamTitle}
-            onChange={(event) => setTeamTitle(event.target.value)}
-            placeholder="مثلاً تیم توربو"
-            required
-          />
-        </Label>
+        <div className="grid gap-4">
+          {existingTeams.length > 0 && (
+            <Label>
+              انتخاب تیم
+              <SelectField
+                value={selectedTeamId ? `team:${selectedTeamId}` : "new"}
+                onValueChange={selectExistingTeam}
+                options={[
+                  { value: "new", label: "ساخت تیم جدید برای این ثبت‌نام" },
+                  ...existingTeams.map((team) => ({
+                    value: `team:${team.id}`,
+                    label: `${team.title} (${team.memberCount.toLocaleString("fa-IR")} عضو)`,
+                    disabled: team.memberCount !== teamSize
+                  }))
+                ]}
+              />
+              <FieldHint>فقط تیم‌هایی که کاپیتان آن‌ها هستید و تعداد اعضای درست دارند قابل انتخاب‌اند.</FieldHint>
+            </Label>
+          )}
+
+          <Label>
+            نام تیم
+            <Input
+              value={teamTitle}
+              onChange={(event) => setTeamTitle(event.target.value)}
+              placeholder="مثلاً تیم توربو"
+              disabled={Boolean(selectedTeamId)}
+              required
+            />
+          </Label>
+        </div>
       )}
 
       {players.map((player, index) => (
@@ -773,6 +880,7 @@ export function RegisterTournamentForm({
             placeholder="نام و نام خانوادگی"
             value={player.name}
             onChange={(event) => updatePlayer(index, "name", event.target.value)}
+            disabled={Boolean(selectedTeamId)}
             required
           />
           <Input
@@ -785,6 +893,7 @@ export function RegisterTournamentForm({
               "mobile",
               event.target.value.replace(/\D/g, "").slice(0, 11)
             )}
+            disabled={Boolean(selectedTeamId)}
             pattern="09[0-9]{9}"
             required
           />
@@ -826,7 +935,13 @@ export function RegisterTournamentForm({
       )}
 
       {error && <Alert tone="error">{error}</Alert>}
-      <Button type="submit" loading={loading} loadingText="در حال بررسی...">
+      {waitlistJoined && <Alert tone="success">در صف انتظار ثبت شدید. وضعیت و پیشنهاد ظرفیت را از حساب کاربری پیگیری کنید.</Alert>}
+      {waitlistAvailable && !waitlistJoined && (
+        <Button type="button" variant="secondary" loading={loading} onClick={joinWaitlist}>
+          ورود به صف انتظار
+        </Button>
+      )}
+      <Button type="submit" loading={loading} loadingText="در حال بررسی..." disabled={waitlistJoined}>
         ادامه و رزرو ۱۵ دقیقه‌ای ظرفیت
       </Button>
     </form>

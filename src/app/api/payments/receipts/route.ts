@@ -28,6 +28,7 @@ type PaymentRow = RowDataPacket & {
   payer_card_last4: string | null;
   tracking_code: string | null;
   paid_on: string | Date | null;
+  registration_status: string;
 };
 
 function matchesSignature(buffer: Buffer, mime: string) {
@@ -63,7 +64,7 @@ export async function POST(request: Request) {
     const payments = await queryRows<PaymentRow[]>(`
       SELECT p.id,p.public_id,p.user_id,p.registration_id,p.status,p.method,
              p.payer_name,p.payer_card_last4,p.tracking_code,p.paid_on,
-             r.buyer_user_id,r.qr_token,pr.file_path AS old_file_path
+             r.buyer_user_id,r.qr_token,r.status AS registration_status,pr.file_path AS old_file_path
       FROM payments p
       JOIN registrations r ON r.id=p.registration_id
       LEFT JOIN payment_receipts pr ON pr.payment_id=p.id
@@ -80,7 +81,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "اجازه بارگذاری فیش برای این پرداخت را ندارید." }, { status: 403 });
     }
 
-    if (["APPROVED", "REFUNDED", "CANCELLED"].includes(payment.status)) {
+    if (["APPROVED", "REFUNDED", "CANCELLED", "REJECTED", "EXPIRED"].includes(payment.status) || ["CANCELLED","REJECTED","EXPIRED","WAITLISTED"].includes(payment.registration_status)) {
       return NextResponse.json({ message: "وضعیت این پرداخت اجازه بارگذاری فیش جدید را نمی‌دهد." }, { status: 409 });
     }
 
@@ -98,6 +99,19 @@ export async function POST(request: Request) {
     const connection = await db.getConnection();
     try {
       await connection.beginTransaction();
+      const [lockedRows] = await connection.query<PaymentRow[]>(`
+        SELECT p.id,p.public_id,p.user_id,p.registration_id,p.status,p.method,p.payer_name,p.payer_card_last4,p.tracking_code,p.paid_on,
+               r.buyer_user_id,r.qr_token,r.status AS registration_status,pr.file_path AS old_file_path
+        FROM payments p JOIN registrations r ON r.id=p.registration_id
+        LEFT JOIN payment_receipts pr ON pr.payment_id=p.id
+        WHERE p.id=? LIMIT 1 FOR UPDATE
+      `, [payment.id]);
+      const locked = lockedRows[0];
+      if (!locked || ["APPROVED","REFUNDED","CANCELLED","REJECTED","EXPIRED"].includes(locked.status) || ["CANCELLED","REJECTED","EXPIRED","WAITLISTED"].includes(locked.registration_status)) {
+        await connection.rollback();
+        await unlink(absolutePath).catch(() => undefined);
+        return NextResponse.json({ message: "وضعیت این ثبت‌نام اجازه بارگذاری فیش جدید را نمی‌دهد." }, { status: 409 });
+      }
       await connection.execute(`
         INSERT INTO payment_receipts(payment_id,file_path,mime_type,file_size,uploaded_at)
         VALUES(?,?,?,?,NOW())
@@ -118,7 +132,7 @@ export async function POST(request: Request) {
       if (hasPaymentDetails) {
         await connection.execute(`
           UPDATE registrations SET status='PENDING_APPROVAL',updated_at=NOW()
-          WHERE id=? AND status NOT IN ('CANCELLED','REJECTED','WAITLISTED')
+          WHERE id=? AND status IN ('PENDING_PAYMENT','PENDING_APPROVAL','NEEDS_CORRECTION','RESERVED')
         `, [payment.registration_id]);
       }
       await connection.commit();
