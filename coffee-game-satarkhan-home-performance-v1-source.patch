@@ -1,0 +1,428 @@
+diff --git a/src/app/(public)/page.tsx b/src/app/(public)/page.tsx
+index a022b87a44c940711a9a29275ab2853cba9a0b44..3310760aee437af8592bccff9943bdb9f97c7c76 100644
+--- a/src/app/(public)/page.tsx
++++ b/src/app/(public)/page.tsx
+@@ -6,18 +6,10 @@ import { LiveMatchCard } from "@/components/live-match-card";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+ import { Reveal } from "@/components/ui/reveal";
+-import { listTournaments } from "@/lib/repositories/tournaments";
+-import { listLiveMatches } from "@/lib/repositories/live";
+-import { getPageContent } from "@/lib/repositories/content";
+-
+-export const dynamic = "force-dynamic";
++import { getHomePageData } from "@/lib/repositories/home";
+ 
+ export default async function HomePage() {
+-  const [tournaments, liveMatches, homeContent] = await Promise.all([
+-    listTournaments(),
+-    listLiveMatches(),
+-    getPageContent("home")
+-  ]);
++  const { tournaments, liveMatches, homeContent } = await getHomePageData();
+   const featured = tournaments.find((item) => item.featured) || tournaments[0];
+ 
+   return (
+@@ -27,7 +19,7 @@ export default async function HomePage() {
+         body={homeContent?.body || "سامانه رسمی مسابقات FC 26 و تخته‌نرد Coffee Game ستارخان؛ از ثبت‌نام تا قرعه، زمان‌بندی و نتیجه زنده."}
+       />
+ 
+-      <Reveal className="page-shell">
++      <Reveal className="home-deferred-section page-shell">
+         <div className="mb-9 flex items-end justify-between gap-4">
+           <div>
+             <p className="section-kicker">UPCOMING TOURNAMENTS</p>
+@@ -38,12 +30,16 @@ export default async function HomePage() {
+             همه مسابقات <ArrowLeft size={17} />
+           </Link>
+         </div>
+-        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+-          {tournaments.slice(0, 3).map((item) => <TournamentCard key={item.id} tournament={item} />)}
+-        </div>
++        {tournaments.length ? (
++          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
++            {tournaments.map((item) => <TournamentCard key={item.id} tournament={item} />)}
++          </div>
++        ) : (
++          <Card className="p-6 text-center text-sm text-[var(--muted)]">در حال حاضر مسابقه‌ای برای نمایش وجود ندارد.</Card>
++        )}
+       </Reveal>
+ 
+-      <section className="border-y border-[var(--line)] bg-[var(--surface)]/70 backdrop-blur">
++      <section className="home-deferred-section border-y border-[var(--line)] bg-[var(--surface)]">
+         <Reveal className="page-shell">
+           <div className="mb-9 flex items-end justify-between gap-4">
+             <div>
+@@ -56,13 +52,17 @@ export default async function HomePage() {
+               نمایشگر زنده
+             </Button>
+           </div>
+-          <div className="grid gap-4 lg:grid-cols-2">
+-            {liveMatches.slice(0, 4).map((match) => <LiveMatchCard key={match.id} match={match} />)}
+-          </div>
++          {liveMatches.length ? (
++            <div className="grid gap-4 lg:grid-cols-2">
++              {liveMatches.map((match) => <LiveMatchCard key={match.id} match={match} />)}
++            </div>
++          ) : (
++            <Card className="p-6 text-center text-sm text-[var(--muted)]">فعلاً بازی زنده یا بازی آماده‌ای وجود ندارد.</Card>
++          )}
+         </Reveal>
+       </section>
+ 
+-      <Reveal className="page-shell">
++      <Reveal className="home-deferred-section page-shell">
+         <div className="grid gap-5 lg:grid-cols-3">
+           {[
+             {
+@@ -94,7 +94,7 @@ export default async function HomePage() {
+       </Reveal>
+ 
+       {featured && (
+-        <Reveal className="container-shell mb-20">
++        <Reveal className="home-deferred-section container-shell mb-20">
+           <section className="relative overflow-hidden rounded-[2.5rem] border border-[var(--line)] p-8 shadow-[var(--shadow-card)] sm:p-12" style={{ background: featured.cover }}>
+             <div className="absolute inset-0 bg-gradient-to-l from-black/70 via-black/35 to-transparent" />
+             <div className="relative max-w-2xl text-white">
+diff --git a/src/app/api/admin/settings/route.ts b/src/app/api/admin/settings/route.ts
+index 9119d5cebf68e2e29c14f6a923c0590635d24d31..9114f17904f4edd8b911e39896825a37d950eafc 100644
+--- a/src/app/api/admin/settings/route.ts
++++ b/src/app/api/admin/settings/route.ts
+@@ -1,3 +1,4 @@
++import { revalidatePath, revalidateTag } from "next/cache";
+ import { NextResponse } from "next/server";
+ import { z } from "zod";
+ import type { RowDataPacket } from "mysql2";
+@@ -11,17 +12,19 @@ const schema=z.object({
+  auth:z.object({admin2fa:z.enum(["optional","required"]),sessionDays:z.number().int().min(1).max(90)}),
+  otp:z.object({ttlMinutes:z.number().int().min(2).max(30),cooldownSeconds:z.number().int().min(10).max(600),hourlyLimit:z.number().int().min(1).max(30),ipHourlyLimit:z.number().int().min(1).max(100),maxAttempts:z.number().int().min(1).max(10)}),
+  registration:z.object({holdMinutes:z.number().int().min(5).max(120),correctionHours:z.number().int().min(1).max(168),waitlistOfferMinutes:z.number().int().min(5).max(1440)}),
++ home:z.object({tournamentsLimit:z.number().int().min(1).max(12),liveMatchesLimit:z.number().int().min(1).max(12)}),
+  payment:z.object({cash:z.boolean(),pos:z.boolean(),receipt:z.boolean(),partial:z.boolean()}),
+  notification:z.object({inApp:z.boolean(),email:z.boolean(),sms:z.enum(["disabled","optional","required"])})
+ });
+ type SettingRow=RowDataPacket&{key:string;value:unknown};
+ function parse(value:unknown){try{return typeof value==='string'?JSON.parse(value):value}catch{return null}}
+-export async function GET(){const auth=await authorize("settings.manage");if(auth.response)return auth.response;const rows=await queryRows<SettingRow[]>(`SELECT \`key\`,value FROM app_settings WHERE \`key\` IN ('club.profile','auth.settings','payment.settings','notification.settings','registration.settings','otp.settings')`);const map=Object.fromEntries(rows.map(r=>[r.key,parse(r.value)]));return NextResponse.json({item:{
++export async function GET(){const auth=await authorize("settings.manage");if(auth.response)return auth.response;const rows=await queryRows<SettingRow[]>(`SELECT \`key\`,value FROM app_settings WHERE \`key\` IN ('club.profile','auth.settings','payment.settings','notification.settings','registration.settings','otp.settings','home.settings')`);const map=Object.fromEntries(rows.map(r=>[r.key,parse(r.value)]));return NextResponse.json({item:{
+  club:map['club.profile']||{name:'کافه گیم ستارخان',phone:'',address:''},
+  auth:{admin2fa:map['auth.settings']?.admin2fa==='required'?'required':'optional',sessionDays:Number(map['auth.settings']?.sessionDays||env.sessionDays)},
+  otp:{ttlMinutes:Number(map['otp.settings']?.ttlMinutes||env.smsOtpTtlMinutes),cooldownSeconds:Number(map['otp.settings']?.cooldownSeconds||env.smsOtpCooldownSeconds),hourlyLimit:Number(map['otp.settings']?.hourlyLimit||env.smsOtpHourlyLimit),ipHourlyLimit:Number(map['otp.settings']?.ipHourlyLimit||env.smsOtpIpHourlyLimit),maxAttempts:Number(map['otp.settings']?.maxAttempts||env.smsOtpMaxAttempts)},
+  registration:{holdMinutes:Number(map['registration.settings']?.holdMinutes||15),correctionHours:Number(map['registration.settings']?.correctionHours||24),waitlistOfferMinutes:Number(map['registration.settings']?.waitlistOfferMinutes||30)},
++ home:{tournamentsLimit:Number(map['home.settings']?.tournamentsLimit||3),liveMatchesLimit:Number(map['home.settings']?.liveMatchesLimit||4)},
+  payment:{cash:map['payment.settings']?.cash!==false,pos:map['payment.settings']?.pos!==false,receipt:map['payment.settings']?.receipt!==false,partial:map['payment.settings']?.partial===true},
+  notification:{inApp:map['notification.settings']?.inApp!==false,email:map['notification.settings']?.email===true,sms:['optional','required'].includes(map['notification.settings']?.sms)?map['notification.settings'].sms:'disabled'}
+ }})}
+-export async function PUT(request:Request){const auth=await authorize("settings.manage");if(auth.response)return auth.response;try{const input=schema.parse(await request.json());const settings:Array<[string,unknown,number]>=[["club.profile",input.club,1],["auth.settings",{password:true,sms:true,google:false,...input.auth},0],["otp.settings",input.otp,0],["registration.settings",input.registration,0],["payment.settings",{provider:"manual_transfer",...input.payment},0],["notification.settings",input.notification,0]];for(const[key,value,isPublic]of settings)await execute(`INSERT INTO app_settings(\`key\`,value,is_public,updated_at) VALUES(?,?,?,NOW()) ON DUPLICATE KEY UPDATE value=VALUES(value),is_public=VALUES(is_public),updated_at=NOW()`,[key,JSON.stringify(value),isPublic]);await writeAuditLog({actorUserId:auth.user.id,action:"settings.updated",entityType:"app_settings",entityId:"main",newData:input,request});return NextResponse.json({ok:true,item:input});}catch(error){if(error instanceof z.ZodError)return NextResponse.json({message:"تنظیمات واردشده معتبر نیست.",errors:error.issues},{status:422});console.error(error);return NextResponse.json({message:"ذخیره تنظیمات انجام نشد."},{status:500});}}
++export async function PUT(request:Request){const auth=await authorize("settings.manage");if(auth.response)return auth.response;try{const input=schema.parse(await request.json());const settings:Array<[string,unknown,number]>=[["club.profile",input.club,1],["auth.settings",{password:true,sms:true,google:false,...input.auth},0],["otp.settings",input.otp,0],["registration.settings",input.registration,0],["home.settings",input.home,1],["payment.settings",{provider:"manual_transfer",...input.payment},0],["notification.settings",input.notification,0]];for(const[key,value,isPublic]of settings)await execute(`INSERT INTO app_settings(\`key\`,value,is_public,updated_at) VALUES(?,?,?,NOW()) ON DUPLICATE KEY UPDATE value=VALUES(value),is_public=VALUES(is_public),updated_at=NOW()`,[key,JSON.stringify(value),isPublic]);revalidateTag("home-page","max");revalidatePath("/");await writeAuditLog({actorUserId:auth.user.id,action:"settings.updated",entityType:"app_settings",entityId:"main",newData:input,request});return NextResponse.json({ok:true,item:input});}catch(error){if(error instanceof z.ZodError)return NextResponse.json({message:"تنظیمات واردشده معتبر نیست.",errors:error.issues},{status:422});console.error(error);return NextResponse.json({message:"ذخیره تنظیمات انجام نشد."},{status:500});}}
+diff --git a/src/app/globals.css b/src/app/globals.css
+index b9fab099c6511043a3763bddab325946b934b97c..3d9a376b4cd31b168ce0825d5c5bf8e3a457e8b3 100644
+--- a/src/app/globals.css
++++ b/src/app/globals.css
+@@ -201,6 +201,25 @@ textarea.field {
+   backdrop-filter: blur(22px);
+ }
+ 
++/* Home-only performance styles: static gradients replace large blur filters. */
++.home-hero-surface {
++  background:
++    radial-gradient(circle at 88% 12%, color-mix(in srgb, var(--brand) 16%, transparent), transparent 32rem),
++    radial-gradient(circle at 10% 88%, color-mix(in srgb, var(--gold) 12%, transparent), transparent 28rem),
++    var(--bg);
++}
++
++.home-feature-panel {
++  border: 1px solid var(--line-strong);
++  background: var(--surface-elevated);
++  box-shadow: var(--shadow-card);
++}
++
++.home-deferred-section {
++  content-visibility: auto;
++  contain-intrinsic-size: auto 680px;
++}
++
+ .select-content {
+   transform-origin: var(--radix-select-content-transform-origin);
+   animation: select-content-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+diff --git a/src/components/admin/settings-manager.tsx b/src/components/admin/settings-manager.tsx
+index b93ec574d9f480d2b9c7f75c9b4b272aacead87f..303c1b4930f51d2f7a256850c770735074661e74 100644
+--- a/src/components/admin/settings-manager.tsx
++++ b/src/components/admin/settings-manager.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ 
+ import { useEffect, useState } from "react";
+-import { Save, ShieldCheck } from "lucide-react";
++import { Gauge, Save, ShieldCheck } from "lucide-react";
+ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+@@ -16,6 +16,7 @@ type Settings = {
+   auth: { admin2fa: "optional" | "required"; sessionDays: number };
+   otp: { ttlMinutes: number; cooldownSeconds: number; hourlyLimit: number; ipHourlyLimit: number; maxAttempts: number };
+   registration: { holdMinutes: number; correctionHours: number; waitlistOfferMinutes: number };
++  home: { tournamentsLimit: number; liveMatchesLimit: number };
+   payment: { cash: boolean; pos: boolean; receipt: boolean; partial: boolean };
+   notification: { inApp: boolean; email: boolean; sms: "disabled" | "optional" | "required" };
+ };
+@@ -60,6 +61,14 @@ export function SettingsManager() {
+         </div>
+       </Card>
+       <Card className="p-6">
++        <h2 className="flex items-center gap-2 font-black"><Gauge className="text-[var(--brand)]" />نمایش صفحه اصلی</h2>
++        <p className="mt-2 text-xs leading-6 text-[var(--muted)]">تعداد کارت‌هایی که در صفحه اصلی نمایش داده می‌شوند. مقدار کمتر، صفحه سبک‌تر و سریع‌تر می‌سازد.</p>
++        <div className="mt-5 grid gap-4 sm:grid-cols-2">
++          <Label>تعداد مسابقات<Input type="number" min="1" max="12" value={settings.home.tournamentsLimit} onChange={(event) => setSettings({ ...settings, home: { ...settings.home, tournamentsLimit: Number(event.target.value) } })} /></Label>
++          <Label>تعداد نتایج زنده<Input type="number" min="1" max="12" value={settings.home.liveMatchesLimit} onChange={(event) => setSettings({ ...settings, home: { ...settings.home, liveMatchesLimit: Number(event.target.value) } })} /></Label>
++        </div>
++      </Card>
++      <Card className="p-6 lg:col-span-2">
+         <h2 className="flex items-center gap-2 font-black"><ShieldCheck className="text-[var(--brand)]" />امنیت و سرویس‌ها</h2>
+         <div className="mt-5 grid gap-4">
+           <Label>ورود دومرحله‌ای مدیر<SelectField value={settings.auth.admin2fa} onValueChange={(value) => setSettings({ ...settings, auth: { ...settings.auth, admin2fa: value as Settings["auth"]["admin2fa"] } })} options={[{ value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>
+diff --git a/src/components/home/home-hero.tsx b/src/components/home/home-hero.tsx
+index f60e2b2b5cbc3f7d299a085dd6a1f17018d963a4..afe04dab2abd9e7284ae9adcf78c95d3e351fad5 100644
+--- a/src/components/home/home-hero.tsx
++++ b/src/components/home/home-hero.tsx
+@@ -26,22 +26,12 @@ export function HomeHero({
+     : 0;
+ 
+   return (
+-    <section className="relative isolate overflow-hidden border-b border-[var(--line)]">
++    <section className="home-hero-surface relative isolate overflow-hidden border-b border-[var(--line)]">
+       <div className="hero-grid absolute inset-0 -z-20" />
+-      <div className="hero-noise absolute inset-0 -z-10" />
+-      <div
+-        aria-hidden="true"
+-        className="absolute -right-36 top-4 -z-10 h-[420px] w-[420px] rounded-full bg-emerald-500/20 blur-[120px]"
+-      />
+-      <div
+-        aria-hidden="true"
+-        className="absolute -left-32 bottom-0 -z-10 h-[380px] w-[380px] rounded-full bg-amber-400/15 blur-[115px]"
+-      />
+-
+-      <div className="container-shell grid min-h-[720px] items-center gap-14 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-20">
++      <div className="container-shell grid min-h-[640px] items-center gap-14 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-20">
+         <div
+         >
+-          <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-xs font-black text-emerald-500 shadow-sm backdrop-blur">
++          <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-xs font-black text-emerald-500 shadow-sm">
+             <Sparkles size={15} />
+             مسابقه، رزرو و نتیجه در یک تجربه روان
+           </span>
+@@ -70,15 +60,15 @@ export function HomeHero({
+           </div>
+ 
+           <div className="mt-11 grid max-w-2xl grid-cols-1 gap-3 text-sm font-bold text-[var(--muted)] sm:grid-cols-3">
+-            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)]/70 px-3.5 py-3 backdrop-blur">
++            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3">
+               <ShieldCheck className="text-[var(--brand)]" size={18} />
+               رزرو و پرداخت امن
+             </span>
+-            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)]/70 px-3.5 py-3 backdrop-blur">
++            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3">
+               <Users className="text-[var(--brand)]" size={18} />
+               فردی و تیمی
+             </span>
+-            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)]/70 px-3.5 py-3 backdrop-blur">
++            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3">
+               <Gamepad2 className="text-[var(--brand)]" size={18} />
+               بهینه برای موبایل
+             </span>
+@@ -89,7 +79,7 @@ export function HomeHero({
+           className="relative mx-auto w-full max-w-[560px]"
+         >
+           <div
+-            className="glass-panel relative overflow-hidden rounded-[2rem] p-4 sm:p-5"
++            className="home-feature-panel relative overflow-hidden rounded-[2rem] p-4 sm:p-5"
+           >
+             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-400/70 to-transparent" />
+ 
+@@ -182,7 +172,7 @@ export function HomeHero({
+ 
+           <div
+             aria-hidden="true"
+-            className="absolute -left-3 top-16 hidden rounded-2xl border border-amber-400/20 bg-[#161208]/90 px-4 py-3 text-xs font-black text-amber-300 shadow-xl backdrop-blur sm:block"
++            className="absolute -left-3 top-16 hidden rounded-2xl border border-amber-400/20 bg-[#161208]/90 px-4 py-3 text-xs font-black text-amber-300 shadow-xl sm:block"
+           >
+             قرعه‌کشی زنده
+           </div>
+diff --git a/src/lib/repositories/home.ts b/src/lib/repositories/home.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4fc0d69a8ca6cc3e7fdd96bf947377739084c9ba
+--- /dev/null
++++ b/src/lib/repositories/home.ts
+@@ -0,0 +1,63 @@
++import { unstable_cache } from "next/cache";
++import type { RowDataPacket } from "mysql2";
++import { queryRows } from "@/lib/db";
++import { getPageContent } from "@/lib/repositories/content";
++import { listHomeLiveMatches } from "@/lib/repositories/live";
++import { listHomeTournaments } from "@/lib/repositories/tournaments";
++
++export type HomeDisplaySettings = {
++  tournamentsLimit: number;
++  liveMatchesLimit: number;
++};
++
++type SettingRow = RowDataPacket & { value: unknown };
++
++const defaults: HomeDisplaySettings = {
++  tournamentsLimit: 3,
++  liveMatchesLimit: 4
++};
++
++function parseSettings(value: unknown): Record<string, unknown> {
++  if (typeof value === "string") {
++    try {
++      return JSON.parse(value) as Record<string, unknown>;
++    } catch {
++      return {};
++    }
++  }
++  return value && typeof value === "object" ? value as Record<string, unknown> : {};
++}
++
++function normalizeLimit(value: unknown, fallback: number) {
++  const number = Number(value);
++  return Number.isInteger(number) ? Math.max(1, Math.min(12, number)) : fallback;
++}
++
++async function loadHomePageData() {
++  const settingRows = await queryRows<SettingRow[]>(
++    "SELECT value FROM app_settings WHERE `key`='home.settings' LIMIT 1"
++  );
++  const stored = parseSettings(settingRows[0]?.value);
++  const settings: HomeDisplaySettings = {
++    tournamentsLimit: normalizeLimit(stored.tournamentsLimit, defaults.tournamentsLimit),
++    liveMatchesLimit: normalizeLimit(stored.liveMatchesLimit, defaults.liveMatchesLimit)
++  };
++
++  const [tournaments, liveMatches, homeContent] = await Promise.all([
++    listHomeTournaments(settings.tournamentsLimit),
++    listHomeLiveMatches(settings.liveMatchesLimit),
++    getPageContent("home")
++  ]);
++
++  return { tournaments, liveMatches, homeContent };
++}
++
++/**
++ * The home page changes frequently enough to stay fresh, but it does not need
++ * to repeat the same database queries for every visitor.
++ */
++export const getHomePageData = unstable_cache(
++  loadHomePageData,
++  ["home-page-data-v1"],
++  { revalidate: 10, tags: ["home-page"] }
++);
+diff --git a/src/lib/repositories/live.ts b/src/lib/repositories/live.ts
+index ad936b81dd1b5b5f06209adeb7c51621ca3bb564..07941615f89dea9959bee075e1c536a4c351c445 100644
+--- a/src/lib/repositories/live.ts
++++ b/src/lib/repositories/live.ts
+@@ -28,7 +28,8 @@ function mapStartsAt(row: LiveMatchRow) {
+   return new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit" }).format(new Date(row.scheduled_at));
+ }
+ 
+-export async function listLiveMatches(): Promise<LiveMatch[]> {
++async function queryLiveMatches(limit: number): Promise<LiveMatch[]> {
++  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+   const rows = await queryRows<LiveMatchRow[]>(`
+     SELECT m.id,t.title AS tournament_title,tr.title AS round_title,
+            res.title AS resource_title,m.status,m.home_score,m.away_score,m.scheduled_at,
+@@ -48,7 +49,7 @@ export async function listLiveMatches(): Promise<LiveMatch[]> {
+       AND t.deleted_at IS NULL
+       AND (m.status<>'COMPLETED' OR m.completed_at>=DATE_SUB(NOW(),INTERVAL 24 HOUR))
+     ORDER BY FIELD(m.status,'LIVE','READY','COMPLETED'),m.scheduled_at ASC,m.id ASC
+-    LIMIT 100
++    LIMIT ${safeLimit}
+   `);
+ 
+   return rows.map((row) => ({
+@@ -64,3 +65,12 @@ export async function listLiveMatches(): Promise<LiveMatch[]> {
+     startsAt: mapStartsAt(row)
+   }));
+ }
++
++export async function listLiveMatches(): Promise<LiveMatch[]> {
++  return queryLiveMatches(100);
++}
++
++export async function listHomeLiveMatches(requestedLimit: number): Promise<LiveMatch[]> {
++  const limit = Math.max(1, Math.min(12, Math.trunc(requestedLimit || 4)));
++  return queryLiveMatches(limit);
++}
+diff --git a/src/lib/repositories/tournaments.ts b/src/lib/repositories/tournaments.ts
+index 46fb9ef607756bb3b1b60902fbbabbeb905ae5e6..33bd6a1238df5a5409403d5c4cb013a827eaf8da 100644
+--- a/src/lib/repositories/tournaments.ts
++++ b/src/lib/repositories/tournaments.ts
+@@ -146,6 +146,68 @@ export async function listTournaments(includeNonPublic = false): Promise<Tournam
+   return rows.map(mapDbTournament);
+ }
+ 
++/**
++ * Lightweight query used only by the home page.
++ * The tournament list is limited before capacity subqueries are evaluated,
++ * so the database does not calculate capacity for every tournament.
++ */
++export async function listHomeTournaments(requestedLimit: number): Promise<Tournament[]> {
++  const limit = Math.max(1, Math.min(12, Math.trunc(requestedLimit || 3)));
++  const rows = await queryRows<TournamentRow[]>(`
++    SELECT
++      c.id,c.slug,c.title,c.description,c.format,c.participant_type,
++      c.team_size,c.status,c.starts_at,c.capacity,c.price,c.rules,c.prize_settings,
++      c.cover_image_url,c.is_featured,c.game_slug,c.game_title,c.venue_title,c.venue_type,
++      (
++        SELECT COALESCE(SUM(
++          CASE
++            WHEN r.status IN ('RESERVED','PENDING_APPROVAL','CONFIRMED','CHECKED_IN') THEN r.slots
++            WHEN r.status='PENDING_PAYMENT' AND (r.reserved_until IS NULL OR r.reserved_until>NOW()) THEN r.slots
++            WHEN r.status='NEEDS_CORRECTION' AND r.correction_expires_at>NOW() THEN r.slots
++            ELSE 0
++          END
++        ),0)
++        FROM registrations r
++        WHERE r.tournament_id=c.id AND r.deleted_at IS NULL
++      )
++      +
++      (
++        SELECT COALESCE(SUM(rh.slots),0)
++        FROM registration_holds rh
++        WHERE rh.tournament_id=c.id
++          AND rh.status='ACTIVE'
++          AND rh.expires_at>NOW()
++      )
++      +
++      (
++        SELECT COALESCE(SUM(w.slots),0)
++        FROM waitlist_entries w
++        WHERE w.tournament_id=c.id
++          AND w.status='OFFERED'
++          AND w.offer_expires_at>NOW()
++      ) AS registered_count
++    FROM (
++      SELECT
++        t.id,t.slug,t.title,t.description,t.format,t.participant_type,
++        t.team_size,t.status,t.starts_at,t.capacity,t.price,t.rules,t.prize_settings,
++        t.cover_image_url,t.is_featured,g.slug AS game_slug,g.title AS game_title,
++        v.title AS venue_title,v.type AS venue_type
++      FROM tournaments t
++      JOIN games g ON g.id=t.game_id
++      LEFT JOIN venues v ON v.id=t.venue_id
++      WHERE t.deleted_at IS NULL
++        AND t.status IN ('PUBLISHED','REGISTRATION_OPEN','REGISTRATION_CLOSED','DRAW_READY','RUNNING','POSTPONED')
++      ORDER BY
++        t.is_featured DESC,
++        FIELD(t.status,'REGISTRATION_OPEN','RUNNING','PUBLISHED','REGISTRATION_CLOSED','DRAW_READY','POSTPONED'),
++        t.starts_at ASC,
++        t.id ASC
++      LIMIT ${limit}
++    ) c
++  `);
++  return rows.map(mapDbTournament);
++}
++
+ export async function findTournament(slug: string): Promise<Tournament | null> {
+   const rows = await queryRows<TournamentRow[]>(`${baseSql} AND t.slug=? AND t.status NOT IN ('DRAFT','CANCELLED') LIMIT 1`, [slug]);
+   return rows[0] ? mapDbTournament(rows[0]) : null;

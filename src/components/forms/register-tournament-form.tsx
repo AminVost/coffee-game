@@ -19,6 +19,7 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PersianDatePicker } from "@/components/ui/persian-date-picker";
 import { Label, FieldHint } from "@/components/ui/label";
 import { SelectField } from "@/components/ui/select";
 import { formatToman } from "@/lib/utils";
@@ -754,10 +755,9 @@ export function RegisterTournamentForm({
             <div className="grid gap-4 sm:grid-cols-2">
               <Label>
                 تاریخ واریز
-                <Input
-                  type="date"
+                <PersianDatePicker
                   value={paidOn}
-                  onChange={(event) => setPaidOn(event.target.value)}
+                  onChange={setPaidOn}
                   required
                 />
               </Label>

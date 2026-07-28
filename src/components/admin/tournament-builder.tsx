@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PersianDatePicker } from "@/components/ui/persian-date-picker";
 import { Label } from "@/components/ui/label";
 import { SelectField } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -276,7 +277,7 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
       </div>}
 
       {step === 3 && <div className="grid gap-5 sm:grid-cols-2">
-        <Label>شروع مسابقه<Input type="datetime-local" value={form.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Label>
+        <Label>شروع مسابقه<PersianDatePicker mode="datetime" value={form.startsAt} onChange={(value) => update("startsAt", value)} required /></Label>
         <Label>مهلت تاخیر (دقیقه)<Input type="number" min="0" value={form.lateToleranceMin} onChange={(event) => update("lateToleranceMin", Number(event.target.value))} /></Label>
         <Label>جایگزینی لیست انتظار<SelectField value={form.waitlistMode} onValueChange={(value) => update("waitlistMode", value as FormState["waitlistMode"])} options={[{ value: "offer", label: "پیشنهاد با مهلت پاسخ" }, { value: "manual", label: "دستی" }, { value: "automatic", label: "خودکار" }]} /></Label>
         <Label className="sm:col-span-2">قوانین؛ هر قانون در یک خط<Textarea className="min-h-40" value={form.rulesText} onChange={(event) => update("rulesText", event.target.value)} /></Label>

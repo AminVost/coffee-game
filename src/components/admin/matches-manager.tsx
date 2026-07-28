@@ -7,6 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PersianDatePicker } from "@/components/ui/persian-date-picker";
 import { Label } from "@/components/ui/label";
 import { SelectField } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -137,7 +138,7 @@ export function MatchesManager() {
             <Label>امتیاز {editing.away}<Input type="number" min="0" max="999" value={awayScore} onChange={(event) => setAwayScore(Number(event.target.value))}/></Label>
             <Label>وضعیت<SelectField value={status} onValueChange={(value) => setStatus(value as typeof status)} options={statusOptions}/></Label>
             {canManageAll && <Label>مدت بازی (دقیقه)<Input type="number" min="5" max="240" value={durationMin} onChange={(event) => setDurationMin(Number(event.target.value))}/></Label>}
-            {canManageAll && <Label>زمان بازی<Input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)}/></Label>}
+            {canManageAll && <Label>زمان بازی<PersianDatePicker mode="datetime" value={scheduledAt} onChange={setScheduledAt} /></Label>}
             {canManageAll && <Label>منبع<SelectField value={resourceId} onValueChange={setResourceId} options={[{ value: "none", label: "بدون تخصیص" }, ...resources.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
             {canManageAll && <Label>داور<SelectField value={refereeUserId} onValueChange={setRefereeUserId} options={[{ value: "none", label: "بدون داور" }, ...referees.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
             <Label className="sm:col-span-2">یادداشت<Textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-24"/></Label>

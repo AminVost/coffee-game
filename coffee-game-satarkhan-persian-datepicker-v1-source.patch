@@ -1,0 +1,390 @@
+diff --git a/package.json b/package.json
+index 95a8d8b7bd520c0e1dc2f76e72d7e836cc2a8f8f..74a6187d8d20ad0a6483b51a3fa9e73926825824 100644
+--- a/package.json
++++ b/package.json
+@@ -26,6 +26,8 @@
+     "next": "16.2.9",
+     "next-themes": "^0.4.6",
+     "react": "19.2.7",
++    "react-date-object": "2.1.9",
++    "react-multi-date-picker": "4.5.2",
+     "react-dom": "19.2.7",
+     "tailwind-merge": "^3.6.0",
+     "zod": "^4.1.12"
+diff --git a/src/app/globals.css b/src/app/globals.css
+index b9fab099c6511043a3763bddab325946b934b97c..46da6ba38b6d0eaab5bde55a2e9d6d6801d67339 100644
+--- a/src/app/globals.css
++++ b/src/app/globals.css
+@@ -294,3 +294,139 @@ html {
+   transition: none !important;
+   scroll-behavior: auto !important;
+ }
++
++/* Shared Persian (Jalali) date and date-time picker */
++.persian-date-picker-container,
++.persian-date-picker-container .rmdp-container {
++  width: 100%;
++}
++
++.persian-date-picker-input {
++  display: flex;
++  width: 100%;
++  height: 3rem;
++  cursor: pointer;
++  border: 1px solid var(--line);
++  border-radius: 1rem;
++  outline: none;
++  background: var(--surface);
++  color: var(--text);
++  padding-inline: 1rem;
++  font-family: inherit;
++  font-size: 0.875rem;
++  text-align: right;
++  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
++}
++
++.persian-date-picker-input:hover {
++  border-color: color-mix(in srgb, var(--brand) 24%, var(--line));
++}
++
++.persian-date-picker-input:focus {
++  border-color: var(--brand);
++  box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 13%, transparent);
++}
++
++.persian-date-picker-input:disabled {
++  cursor: not-allowed;
++  background: var(--surface-2);
++  opacity: 0.6;
++}
++
++.persian-date-picker-calendar.rmdp-wrapper,
++.persian-date-picker-calendar .rmdp-calendar,
++.persian-date-picker-calendar .rmdp-time-picker div input,
++.persian-date-picker-calendar .rmdp-toolbar {
++  background: var(--surface-elevated);
++  color: var(--text);
++  font-family: inherit;
++}
++
++.persian-date-picker-calendar.rmdp-wrapper {
++  z-index: 1200;
++  overflow: hidden;
++  border: 1px solid var(--line-strong);
++  border-radius: 1.25rem;
++  box-shadow: var(--shadow-float);
++}
++
++.rmdp-container .ep-arrow::after {
++  background: var(--surface-elevated);
++  border-color: var(--line-strong);
++}
++
++.persian-date-picker-calendar .rmdp-header-values,
++.persian-date-picker-calendar .rmdp-week-day,
++.persian-date-picker-calendar .rmdp-day span,
++.persian-date-picker-calendar .rmdp-time-picker,
++.persian-date-picker-calendar .rmdp-toolbar div {
++  color: var(--text);
++  font-family: inherit;
++}
++
++.persian-date-picker-calendar .rmdp-week-day {
++  color: var(--brand);
++  font-weight: 900;
++}
++
++.persian-date-picker-calendar .rmdp-day.rmdp-deactive span,
++.persian-date-picker-calendar .rmdp-day.rmdp-disabled span {
++  color: var(--muted);
++  opacity: 0.55;
++}
++
++.persian-date-picker-calendar .rmdp-day:not(.rmdp-disabled):not(.rmdp-day-hidden) span:hover,
++.persian-date-picker-calendar .rmdp-day.rmdp-today span {
++  background: color-mix(in srgb, var(--brand) 16%, var(--surface-2));
++  color: var(--text);
++}
++
++.persian-date-picker-calendar .rmdp-day.rmdp-selected span,
++.persian-date-picker-calendar .rmdp-day.rmdp-selected span:hover {
++  background: var(--brand);
++  color: var(--brand-contrast, #07100c);
++  box-shadow: none;
++}
++
++.persian-date-picker-calendar .rmdp-arrow {
++  border-color: var(--brand);
++}
++
++.persian-date-picker-calendar .rmdp-arrow-container:hover {
++  background: color-mix(in srgb, var(--brand) 16%, var(--surface-2));
++  box-shadow: none;
++}
++
++.persian-date-picker-calendar .rmdp-time-picker {
++  border-top-color: var(--line);
++  border-bottom-color: var(--line);
++}
++
++.persian-date-picker-calendar .rmdp-time-picker div input {
++  border: 1px solid var(--line);
++  border-radius: 0.75rem;
++  outline: none;
++}
++
++.persian-date-picker-calendar .rmdp-toolbar {
++  border-top: 1px solid var(--line);
++  gap: 0.35rem;
++  padding: 0.65rem;
++}
++
++.persian-date-picker-calendar .rmdp-toolbar div {
++  border-radius: 0.7rem;
++  padding: 0.4rem 0.65rem;
++  font-size: 0.75rem;
++  font-weight: 800;
++}
++
++.persian-date-picker-calendar .rmdp-toolbar div:hover {
++  background: var(--surface-2);
++}
++
++@media (max-width: 640px) {
++  .persian-date-picker-calendar.rmdp-wrapper {
++    max-width: calc(100vw - 20px);
++  }
++}
+diff --git a/src/components/account/payments-list.tsx b/src/components/account/payments-list.tsx
+index 145bcae5dca06c894843c2013b203136a7a2a6bd..a2a4ef42650d20bbdb19a78d54a1e0dcc8191a22 100644
+--- a/src/components/account/payments-list.tsx
++++ b/src/components/account/payments-list.tsx
+@@ -7,6 +7,7 @@ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+ import { Input } from "@/components/ui/input";
++import { PersianDatePicker } from "@/components/ui/persian-date-picker";
+ import { Label, FieldHint } from "@/components/ui/label";
+ import { formatToman } from "@/lib/utils";
+ 
+@@ -187,7 +188,7 @@ export function PaymentsList() {
+               <Label>کد پیگیری<Input dir="ltr" value={edit.trackingCode} onChange={(event) => setEdit((state) => ({ ...state, trackingCode: event.target.value.replace(/\s/g, "").slice(0, 64) }))} required /></Label>
+             </div>
+             <div className="grid gap-4 sm:grid-cols-2">
+-              <Label>تاریخ واریز<Input type="date" value={edit.paidOn} onChange={(event) => setEdit((state) => ({ ...state, paidOn: event.target.value }))} required /></Label>
++              <Label>تاریخ واریز<PersianDatePicker value={edit.paidOn} onChange={(value) => setEdit((state) => ({ ...state, paidOn: value }))} required /></Label>
+               <Label>ساعت واریز <span className="font-normal text-[var(--muted)]">(اختیاری)</span><Input type="time" value={edit.paidTime} onChange={(event) => setEdit((state) => ({ ...state, paidTime: event.target.value }))} /></Label>
+             </div>
+             <Label>تصویر رسید <span className="font-normal text-[var(--muted)]">(اختیاری)</span><Input type="file" accept="image/jpeg,image/png,application/pdf" onChange={(event) => setEdit((state) => ({ ...state, receipt: event.target.files?.[0] || null }))} /><FieldHint>ارسال تصویر اجباری نیست.</FieldHint></Label>
+diff --git a/src/components/admin/matches-manager.tsx b/src/components/admin/matches-manager.tsx
+index 910fb86be0004b0a5eb5e180f51fc005c4c44358..95084a50598919fedbbeb338c8d4cdad26e5a3f7 100644
+--- a/src/components/admin/matches-manager.tsx
++++ b/src/components/admin/matches-manager.tsx
+@@ -7,6 +7,7 @@ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+ import { Input } from "@/components/ui/input";
++import { PersianDatePicker } from "@/components/ui/persian-date-picker";
+ import { Label } from "@/components/ui/label";
+ import { SelectField } from "@/components/ui/select";
+ import { Textarea } from "@/components/ui/textarea";
+@@ -137,7 +138,7 @@ export function MatchesManager() {
+             <Label>امتیاز {editing.away}<Input type="number" min="0" max="999" value={awayScore} onChange={(event) => setAwayScore(Number(event.target.value))}/></Label>
+             <Label>وضعیت<SelectField value={status} onValueChange={(value) => setStatus(value as typeof status)} options={statusOptions}/></Label>
+             {canManageAll && <Label>مدت بازی (دقیقه)<Input type="number" min="5" max="240" value={durationMin} onChange={(event) => setDurationMin(Number(event.target.value))}/></Label>}
+-            {canManageAll && <Label>زمان بازی<Input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)}/></Label>}
++            {canManageAll && <Label>زمان بازی<PersianDatePicker mode="datetime" value={scheduledAt} onChange={setScheduledAt} /></Label>}
+             {canManageAll && <Label>منبع<SelectField value={resourceId} onValueChange={setResourceId} options={[{ value: "none", label: "بدون تخصیص" }, ...resources.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
+             {canManageAll && <Label>داور<SelectField value={refereeUserId} onValueChange={setRefereeUserId} options={[{ value: "none", label: "بدون داور" }, ...referees.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
+             <Label className="sm:col-span-2">یادداشت<Textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-24"/></Label>
+diff --git a/src/components/admin/tournament-builder.tsx b/src/components/admin/tournament-builder.tsx
+index beafbdad555df82ec41da348a7222a2fcbd93e6f..fa3e65b8a38e335cd0a9b3b2e683a640b07bf5f7 100644
+--- a/src/components/admin/tournament-builder.tsx
++++ b/src/components/admin/tournament-builder.tsx
+@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+ import { Input } from "@/components/ui/input";
++import { PersianDatePicker } from "@/components/ui/persian-date-picker";
+ import { Label } from "@/components/ui/label";
+ import { SelectField } from "@/components/ui/select";
+ import { Switch } from "@/components/ui/switch";
+@@ -276,7 +277,7 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
+       </div>}
+ 
+       {step === 3 && <div className="grid gap-5 sm:grid-cols-2">
+-        <Label>شروع مسابقه<Input type="datetime-local" value={form.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Label>
++        <Label>شروع مسابقه<PersianDatePicker mode="datetime" value={form.startsAt} onChange={(value) => update("startsAt", value)} required /></Label>
+         <Label>مهلت تاخیر (دقیقه)<Input type="number" min="0" value={form.lateToleranceMin} onChange={(event) => update("lateToleranceMin", Number(event.target.value))} /></Label>
+         <Label>جایگزینی لیست انتظار<SelectField value={form.waitlistMode} onValueChange={(value) => update("waitlistMode", value as FormState["waitlistMode"])} options={[{ value: "offer", label: "پیشنهاد با مهلت پاسخ" }, { value: "manual", label: "دستی" }, { value: "automatic", label: "خودکار" }]} /></Label>
+         <Label className="sm:col-span-2">قوانین؛ هر قانون در یک خط<Textarea className="min-h-40" value={form.rulesText} onChange={(event) => update("rulesText", event.target.value)} /></Label>
+diff --git a/src/components/admin/tournament-edit-form.tsx b/src/components/admin/tournament-edit-form.tsx
+index 4cf9f5eb1f4efa1ef78fbacfc68b0c4f99d939e6..2bd6cb38fbc143489c7549f902ce1bd06893ddaf 100644
+--- a/src/components/admin/tournament-edit-form.tsx
++++ b/src/components/admin/tournament-edit-form.tsx
+@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+ import { Input } from "@/components/ui/input";
++import { PersianDatePicker } from "@/components/ui/persian-date-picker";
+ import { Label } from "@/components/ui/label";
+ import { SelectField } from "@/components/ui/select";
+ import { Switch } from "@/components/ui/switch";
+@@ -15,4 +16,4 @@ type Form={id:string;title:string;slug:string;subtitle:string;description:string
+ const statuses=["DRAFT","PUBLISHED","REGISTRATION_OPEN","REGISTRATION_CLOSED","DRAW_READY","RUNNING","COMPLETED","POSTPONED","CANCELLED"].map(value=>({value,label:value}));
+ function parseObject(text:string,label:string){try{const value=JSON.parse(text||'{}');if(!value||Array.isArray(value)||typeof value!=='object')throw new Error();return value}catch{throw new Error(`${label} باید JSON Object معتبر باشد.`)}}
+ function iso(value:string){return value?new Date(value).toISOString():null}
+-export function TournamentEditForm({initial,games,venues,templates}:{initial:Form;games:Option[];venues:Option[];templates:Option[]}){const router=useRouter();const[form,setForm]=useState(initial);const[saving,setSaving]=useState(false);const[error,setError]=useState('');const[message,setMessage]=useState('');function update<K extends keyof Form>(key:K,value:Form[K]){setForm(v=>({...v,[key]:value}))}async function save(){setSaving(true);setError('');setMessage('');try{const payload={title:form.title,slug:form.slug,subtitle:form.subtitle||undefined,description:form.description||undefined,gameId:form.gameId,templateId:form.templateId,venueId:form.venueId,format:form.format,participantType:form.participantType,teamSize:form.participantType==='TEAM'?form.teamSize:1,capacity:form.capacity,minParticipants:form.minParticipants,price:form.price,status:form.status,registrationStartsAt:iso(form.registrationStartsAt),registrationEndsAt:iso(form.registrationEndsAt),startsAt:new Date(form.startsAt).toISOString(),endsAt:iso(form.endsAt),reservationExpiresMin:form.reservationExpiresMin,lateToleranceMin:form.lateToleranceMin,waitlistMode:form.waitlistMode,allowMultiSlot:form.allowMultiSlot,hasThirdPlace:form.hasThirdPlace,drawMode:form.drawMode,rules:form.rulesText.split('\n').map(v=>v.trim()).filter(Boolean),gameSettings:parseObject(form.gameSettingsText,'تنظیمات بازی'),scoringSettings:parseObject(form.scoringSettingsText,'تنظیمات امتیاز'),notificationSettings:parseObject(form.notificationSettingsText,'تنظیمات اعلان'),cancellationSettings:parseObject(form.cancellationSettingsText,'تنظیمات لغو'),prizeSettings:parseObject(form.prizeSettingsText,'تنظیمات جایزه'),coverImageUrl:form.coverImageUrl||null,isFeatured:form.isFeatured};const response=await fetch(`/api/tournaments/${form.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.message||'ویرایش انجام نشد.');setMessage('تغییرات مسابقه ذخیره شد.');router.refresh()}catch(caught){setError(caught instanceof Error?caught.message:'ویرایش انجام نشد.')}finally{setSaving(false)}}return <Card className="mt-7 p-6"><div className="grid gap-5 md:grid-cols-2"><Label>عنوان<Input value={form.title} onChange={e=>update('title',e.target.value)}/></Label><Label>Slug<Input dir="ltr" value={form.slug} onChange={e=>update('slug',e.target.value)}/></Label><Label>زیرعنوان<Input value={form.subtitle} onChange={e=>update('subtitle',e.target.value)}/></Label><Label>بازی<SelectField value={String(form.gameId)} onValueChange={v=>update('gameId',Number(v))} options={games.map(v=>({value:String(v.id),label:v.title}))}/></Label><Label>قالب<SelectField value={form.templateId?String(form.templateId):'none'} onValueChange={v=>update('templateId',v==='none'?null:Number(v))} options={[{value:'none',label:'بدون قالب'},...templates.map(v=>({value:String(v.id),label:v.title}))]}/></Label><Label>محل<SelectField value={form.venueId?String(form.venueId):'none'} onValueChange={v=>update('venueId',v==='none'?null:Number(v))} options={[{value:'none',label:'اعلام بعدی'},...venues.map(v=>({value:String(v.id),label:v.title}))]}/></Label><Label>فرمت<Input value={form.format} onChange={e=>update('format',e.target.value)}/></Label><Label>نوع شرکت‌کننده<SelectField value={form.participantType} onValueChange={v=>update('participantType',v as Form['participantType'])} options={[{value:'INDIVIDUAL',label:'انفرادی'},{value:'TEAM',label:'تیمی'}]}/></Label>{form.participantType==='TEAM'&&<Label>تعداد اعضای تیم<Input type="number" min="2" max="20" value={form.teamSize} onChange={e=>update('teamSize',Number(e.target.value))}/></Label>}<Label>ظرفیت<Input type="number" min="2" value={form.capacity} onChange={e=>update('capacity',Number(e.target.value))}/></Label><Label>حداقل شرکت‌کننده<Input type="number" min="2" value={form.minParticipants} onChange={e=>update('minParticipants',Number(e.target.value))}/></Label><Label>هزینه<Input type="number" min="0" value={form.price} onChange={e=>update('price',Number(e.target.value))}/></Label><Label>وضعیت<SelectField value={form.status} onValueChange={v=>update('status',v)} options={statuses}/></Label><Label>شروع ثبت‌نام<Input type="datetime-local" value={form.registrationStartsAt} onChange={e=>update('registrationStartsAt',e.target.value)}/></Label><Label>پایان ثبت‌نام<Input type="datetime-local" value={form.registrationEndsAt} onChange={e=>update('registrationEndsAt',e.target.value)}/></Label><Label>شروع مسابقه<Input type="datetime-local" value={form.startsAt} onChange={e=>update('startsAt',e.target.value)}/></Label><Label>پایان مسابقه<Input type="datetime-local" value={form.endsAt} onChange={e=>update('endsAt',e.target.value)}/></Label><Label>مهلت پرداخت حضوری (دقیقه)<Input type="number" min="5" value={form.reservationExpiresMin} onChange={e=>update('reservationExpiresMin',Number(e.target.value))}/></Label><Label>مهلت تأخیر (دقیقه)<Input type="number" min="0" value={form.lateToleranceMin} onChange={e=>update('lateToleranceMin',Number(e.target.value))}/></Label><Label>صف انتظار<SelectField value={form.waitlistMode} onValueChange={v=>update('waitlistMode',v)} options={[{value:'disabled',label:'غیرفعال'},{value:'offer',label:'پیشنهاد با مهلت'},{value:'manual',label:'دستی'},{value:'automatic',label:'خودکار'}]}/></Label><Label>نوع قرعه<SelectField value={form.drawMode} onValueChange={v=>update('drawMode',v)} options={[{value:'random',label:'تصادفی'},{value:'seeded',label:'سیدبندی'},{value:'custom',label:'دستی'}]}/></Label><Label>تصویر/گرادیان کاور<Input value={form.coverImageUrl} onChange={e=>update('coverImageUrl',e.target.value)}/></Label><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>ویژه</span><Switch checked={form.isFeatured} onCheckedChange={v=>update('isFeatured',v)}/></div><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>چند سهم</span><Switch checked={form.allowMultiSlot} onCheckedChange={v=>update('allowMultiSlot',v)}/></div><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>رده‌بندی سوم</span><Switch checked={form.hasThirdPlace} onCheckedChange={v=>update('hasThirdPlace',v)}/></div><Label className="md:col-span-2">توضیحات<Textarea className="min-h-32" value={form.description} onChange={e=>update('description',e.target.value)}/></Label><Label className="md:col-span-2">قوانین؛ هر خط یک قانون<Textarea className="min-h-40" value={form.rulesText} onChange={e=>update('rulesText',e.target.value)}/></Label>{([['gameSettingsText','تنظیمات بازی JSON'],['scoringSettingsText','تنظیمات امتیاز JSON'],['notificationSettingsText','تنظیمات اعلان JSON'],['cancellationSettingsText','تنظیمات لغو JSON'],['prizeSettingsText','تنظیمات جوایز JSON']] as const).map(([key,label])=><Label key={key}>{label}<Textarea dir="ltr" value={form[key]} onChange={e=>update(key,e.target.value)}/></Label>)}</div>{error&&<Alert tone="error" className="mt-5">{error}</Alert>}{message&&<Alert tone="success" className="mt-5">{message}</Alert>}<Button className="mt-6" type="button" onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={17}/>ذخیره تغییرات</Button></Card>}
++export function TournamentEditForm({initial,games,venues,templates}:{initial:Form;games:Option[];venues:Option[];templates:Option[]}){const router=useRouter();const[form,setForm]=useState(initial);const[saving,setSaving]=useState(false);const[error,setError]=useState('');const[message,setMessage]=useState('');function update<K extends keyof Form>(key:K,value:Form[K]){setForm(v=>({...v,[key]:value}))}async function save(){setSaving(true);setError('');setMessage('');try{const payload={title:form.title,slug:form.slug,subtitle:form.subtitle||undefined,description:form.description||undefined,gameId:form.gameId,templateId:form.templateId,venueId:form.venueId,format:form.format,participantType:form.participantType,teamSize:form.participantType==='TEAM'?form.teamSize:1,capacity:form.capacity,minParticipants:form.minParticipants,price:form.price,status:form.status,registrationStartsAt:iso(form.registrationStartsAt),registrationEndsAt:iso(form.registrationEndsAt),startsAt:new Date(form.startsAt).toISOString(),endsAt:iso(form.endsAt),reservationExpiresMin:form.reservationExpiresMin,lateToleranceMin:form.lateToleranceMin,waitlistMode:form.waitlistMode,allowMultiSlot:form.allowMultiSlot,hasThirdPlace:form.hasThirdPlace,drawMode:form.drawMode,rules:form.rulesText.split('\n').map(v=>v.trim()).filter(Boolean),gameSettings:parseObject(form.gameSettingsText,'تنظیمات بازی'),scoringSettings:parseObject(form.scoringSettingsText,'تنظیمات امتیاز'),notificationSettings:parseObject(form.notificationSettingsText,'تنظیمات اعلان'),cancellationSettings:parseObject(form.cancellationSettingsText,'تنظیمات لغو'),prizeSettings:parseObject(form.prizeSettingsText,'تنظیمات جایزه'),coverImageUrl:form.coverImageUrl||null,isFeatured:form.isFeatured};const response=await fetch(`/api/tournaments/${form.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.message||'ویرایش انجام نشد.');setMessage('تغییرات مسابقه ذخیره شد.');router.refresh()}catch(caught){setError(caught instanceof Error?caught.message:'ویرایش انجام نشد.')}finally{setSaving(false)}}return <Card className="mt-7 p-6"><div className="grid gap-5 md:grid-cols-2"><Label>عنوان<Input value={form.title} onChange={e=>update('title',e.target.value)}/></Label><Label>Slug<Input dir="ltr" value={form.slug} onChange={e=>update('slug',e.target.value)}/></Label><Label>زیرعنوان<Input value={form.subtitle} onChange={e=>update('subtitle',e.target.value)}/></Label><Label>بازی<SelectField value={String(form.gameId)} onValueChange={v=>update('gameId',Number(v))} options={games.map(v=>({value:String(v.id),label:v.title}))}/></Label><Label>قالب<SelectField value={form.templateId?String(form.templateId):'none'} onValueChange={v=>update('templateId',v==='none'?null:Number(v))} options={[{value:'none',label:'بدون قالب'},...templates.map(v=>({value:String(v.id),label:v.title}))]}/></Label><Label>محل<SelectField value={form.venueId?String(form.venueId):'none'} onValueChange={v=>update('venueId',v==='none'?null:Number(v))} options={[{value:'none',label:'اعلام بعدی'},...venues.map(v=>({value:String(v.id),label:v.title}))]}/></Label><Label>فرمت<Input value={form.format} onChange={e=>update('format',e.target.value)}/></Label><Label>نوع شرکت‌کننده<SelectField value={form.participantType} onValueChange={v=>update('participantType',v as Form['participantType'])} options={[{value:'INDIVIDUAL',label:'انفرادی'},{value:'TEAM',label:'تیمی'}]}/></Label>{form.participantType==='TEAM'&&<Label>تعداد اعضای تیم<Input type="number" min="2" max="20" value={form.teamSize} onChange={e=>update('teamSize',Number(e.target.value))}/></Label>}<Label>ظرفیت<Input type="number" min="2" value={form.capacity} onChange={e=>update('capacity',Number(e.target.value))}/></Label><Label>حداقل شرکت‌کننده<Input type="number" min="2" value={form.minParticipants} onChange={e=>update('minParticipants',Number(e.target.value))}/></Label><Label>هزینه<Input type="number" min="0" value={form.price} onChange={e=>update('price',Number(e.target.value))}/></Label><Label>وضعیت<SelectField value={form.status} onValueChange={v=>update('status',v)} options={statuses}/></Label><Label>شروع ثبت‌نام<PersianDatePicker mode="datetime" value={form.registrationStartsAt} onChange={v=>update('registrationStartsAt',v)}/></Label><Label>پایان ثبت‌نام<PersianDatePicker mode="datetime" value={form.registrationEndsAt} onChange={v=>update('registrationEndsAt',v)}/></Label><Label>شروع مسابقه<PersianDatePicker mode="datetime" value={form.startsAt} onChange={v=>update('startsAt',v)} required/></Label><Label>پایان مسابقه<PersianDatePicker mode="datetime" value={form.endsAt} onChange={v=>update('endsAt',v)}/></Label><Label>مهلت پرداخت حضوری (دقیقه)<Input type="number" min="5" value={form.reservationExpiresMin} onChange={e=>update('reservationExpiresMin',Number(e.target.value))}/></Label><Label>مهلت تأخیر (دقیقه)<Input type="number" min="0" value={form.lateToleranceMin} onChange={e=>update('lateToleranceMin',Number(e.target.value))}/></Label><Label>صف انتظار<SelectField value={form.waitlistMode} onValueChange={v=>update('waitlistMode',v)} options={[{value:'disabled',label:'غیرفعال'},{value:'offer',label:'پیشنهاد با مهلت'},{value:'manual',label:'دستی'},{value:'automatic',label:'خودکار'}]}/></Label><Label>نوع قرعه<SelectField value={form.drawMode} onValueChange={v=>update('drawMode',v)} options={[{value:'random',label:'تصادفی'},{value:'seeded',label:'سیدبندی'},{value:'custom',label:'دستی'}]}/></Label><Label>تصویر/گرادیان کاور<Input value={form.coverImageUrl} onChange={e=>update('coverImageUrl',e.target.value)}/></Label><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>ویژه</span><Switch checked={form.isFeatured} onCheckedChange={v=>update('isFeatured',v)}/></div><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>چند سهم</span><Switch checked={form.allowMultiSlot} onCheckedChange={v=>update('allowMultiSlot',v)}/></div><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>رده‌بندی سوم</span><Switch checked={form.hasThirdPlace} onCheckedChange={v=>update('hasThirdPlace',v)}/></div><Label className="md:col-span-2">توضیحات<Textarea className="min-h-32" value={form.description} onChange={e=>update('description',e.target.value)}/></Label><Label className="md:col-span-2">قوانین؛ هر خط یک قانون<Textarea className="min-h-40" value={form.rulesText} onChange={e=>update('rulesText',e.target.value)}/></Label>{([['gameSettingsText','تنظیمات بازی JSON'],['scoringSettingsText','تنظیمات امتیاز JSON'],['notificationSettingsText','تنظیمات اعلان JSON'],['cancellationSettingsText','تنظیمات لغو JSON'],['prizeSettingsText','تنظیمات جوایز JSON']] as const).map(([key,label])=><Label key={key}>{label}<Textarea dir="ltr" value={form[key]} onChange={e=>update(key,e.target.value)}/></Label>)}</div>{error&&<Alert tone="error" className="mt-5">{error}</Alert>}{message&&<Alert tone="success" className="mt-5">{message}</Alert>}<Button className="mt-6" type="button" onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={17}/>ذخیره تغییرات</Button></Card>}
+diff --git a/src/components/forms/register-tournament-form.tsx b/src/components/forms/register-tournament-form.tsx
+index cab970765539090ff9dcf70259add4b90856df60..1f9539913175e1c17e766cbebaa71b54b85e03f0 100644
+--- a/src/components/forms/register-tournament-form.tsx
++++ b/src/components/forms/register-tournament-form.tsx
+@@ -19,6 +19,7 @@ import {
+ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Input } from "@/components/ui/input";
++import { PersianDatePicker } from "@/components/ui/persian-date-picker";
+ import { Label, FieldHint } from "@/components/ui/label";
+ import { SelectField } from "@/components/ui/select";
+ import { formatToman } from "@/lib/utils";
+@@ -754,10 +755,9 @@ export function RegisterTournamentForm({
+             <div className="grid gap-4 sm:grid-cols-2">
+               <Label>
+                 تاریخ واریز
+-                <Input
+-                  type="date"
++                <PersianDatePicker
+                   value={paidOn}
+-                  onChange={(event) => setPaidOn(event.target.value)}
++                  onChange={setPaidOn}
+                   required
+                 />
+               </Label>
+diff --git a/src/components/ui/persian-date-picker.tsx b/src/components/ui/persian-date-picker.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..17e7ffda9ecd179e33ca53322fade5e76a4ef153
+--- /dev/null
++++ b/src/components/ui/persian-date-picker.tsx
+@@ -0,0 +1,121 @@
++"use client";
++
++import { useMemo } from "react";
++import DatePicker, { DateObject } from "react-multi-date-picker";
++import TimePicker from "react-multi-date-picker/plugins/time_picker";
++import Toolbar from "react-multi-date-picker/plugins/toolbar";
++import gregorian from "react-date-object/calendars/gregorian";
++import persian from "react-date-object/calendars/persian";
++import gregorianEn from "react-date-object/locales/gregorian_en";
++import persianFa from "react-date-object/locales/persian_fa";
++import { cn } from "@/lib/utils";
++
++type PickerMode = "date" | "datetime";
++
++export type PersianDatePickerProps = {
++  value: string;
++  onChange: (value: string) => void;
++  mode?: PickerMode;
++  id?: string;
++  name?: string;
++  className?: string;
++  placeholder?: string;
++  required?: boolean;
++  disabled?: boolean;
++  min?: string;
++  max?: string;
++};
++
++function localValueToDate(value: string, mode: PickerMode) {
++  if (!value) return null;
++
++  const pattern = mode === "datetime"
++    ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
++    : /^(\d{4})-(\d{2})-(\d{2})$/;
++  const match = value.match(pattern);
++  if (!match) return null;
++
++  const year = Number(match[1]);
++  const month = Number(match[2]);
++  const day = Number(match[3]);
++  const hour = mode === "datetime" ? Number(match[4]) : 0;
++  const minute = mode === "datetime" ? Number(match[5]) : 0;
++  const date = new Date(year, month - 1, day, hour, minute, 0, 0);
++
++  if (
++    date.getFullYear() !== year
++    || date.getMonth() !== month - 1
++    || date.getDate() !== day
++    || date.getHours() !== hour
++    || date.getMinutes() !== minute
++  ) return null;
++
++  return date;
++}
++
++function selectedToLocalValue(selected: DateObject, mode: PickerMode) {
++  const gregorianValue = new DateObject(selected).convert(gregorian, gregorianEn);
++  return gregorianValue.format(mode === "datetime" ? "YYYY-MM-DDTHH:mm" : "YYYY-MM-DD");
++}
++
++export function PersianDatePicker({
++  value,
++  onChange,
++  mode = "date",
++  id,
++  name,
++  className,
++  placeholder,
++  required,
++  disabled,
++  min,
++  max
++}: PersianDatePickerProps) {
++  const pickerValue = useMemo(() => localValueToDate(value, mode), [mode, value]);
++  const minDate = useMemo(() => localValueToDate(min || "", mode), [min, mode]);
++  const maxDate = useMemo(() => localValueToDate(max || "", mode), [max, mode]);
++  const isDateTime = mode === "datetime";
++
++  return (
++    <DatePicker
++      id={id}
++      name={name}
++      value={pickerValue}
++      onChange={(selected) => {
++        if (!selected || Array.isArray(selected)) {
++          onChange("");
++          return;
++        }
++        onChange(selectedToLocalValue(selected, mode));
++      }}
++      calendar={persian}
++      locale={persianFa}
++      format={isDateTime ? "YYYY/MM/DD - HH:mm" : "YYYY/MM/DD"}
++      minDate={minDate || undefined}
++      maxDate={maxDate || undefined}
++      weekStartDayIndex={6}
++      calendarPosition="bottom-right"
++      containerClassName={cn("persian-date-picker-container", className)}
++      inputClass="persian-date-picker-input"
++      className="persian-date-picker-calendar"
++      placeholder={placeholder || (isDateTime ? "انتخاب تاریخ و ساعت" : "انتخاب تاریخ")}
++      required={required}
++      disabled={disabled}
++      editable={false}
++      hideOnScroll
++      zIndex={1200}
++      inputMode="none"
++      plugins={[
++        ...(isDateTime
++          ? [<TimePicker key="time" position="bottom" hideSeconds />]
++          : []),
++        <Toolbar
++          key="toolbar"
++          position="bottom"
++          sort={["today", "deselect", "close"]}
++          names={{ today: "امروز", deselect: "پاک کردن", close: "بستن" }}
++        />
++      ]}
++    />
++  );
++}

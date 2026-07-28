@@ -7,6 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PersianDatePicker } from "@/components/ui/persian-date-picker";
 import { Label, FieldHint } from "@/components/ui/label";
 import { formatToman } from "@/lib/utils";
 
@@ -187,7 +188,7 @@ export function PaymentsList() {
               <Label>کد پیگیری<Input dir="ltr" value={edit.trackingCode} onChange={(event) => setEdit((state) => ({ ...state, trackingCode: event.target.value.replace(/\s/g, "").slice(0, 64) }))} required /></Label>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              <Label>تاریخ واریز<Input type="date" value={edit.paidOn} onChange={(event) => setEdit((state) => ({ ...state, paidOn: event.target.value }))} required /></Label>
+              <Label>تاریخ واریز<PersianDatePicker value={edit.paidOn} onChange={(value) => setEdit((state) => ({ ...state, paidOn: value }))} required /></Label>
               <Label>ساعت واریز <span className="font-normal text-[var(--muted)]">(اختیاری)</span><Input type="time" value={edit.paidTime} onChange={(event) => setEdit((state) => ({ ...state, paidTime: event.target.value }))} /></Label>
             </div>
             <Label>تصویر رسید <span className="font-normal text-[var(--muted)]">(اختیاری)</span><Input type="file" accept="image/jpeg,image/png,application/pdf" onChange={(event) => setEdit((state) => ({ ...state, receipt: event.target.files?.[0] || null }))} /><FieldHint>ارسال تصویر اجباری نیست.</FieldHint></Label>
