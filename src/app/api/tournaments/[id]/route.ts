@@ -1,26 +1,37 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
+import { z } from "zod";
 import { authorize } from "@/lib/authorization";
 import { writeAuditLog } from "@/lib/audit";
 import { db, queryRows } from "@/lib/db";
+import {
+  canChangeTournamentStatus,
+  openRegistrationStatusError,
+  type TournamentStatus
+} from "@/lib/tournament-definition";
 import { tournamentInputSchema } from "@/lib/tournament-input";
+import { offerNextWaitlistEntries } from "@/lib/waitlist";
 
 type TournamentRow = RowDataPacket & {
   id: number;
   slug: string;
   title: string;
-  status: string;
+  status: TournamentStatus;
   capacity: number;
   game_id: number;
+  venue_id: number | null;
   participant_type: string;
   team_size: number;
   format: string;
+  draw_mode: string;
+  has_third_place: number;
+  starts_at: Date;
   template_id: number | null;
 };
 
 type CountRow = RowDataPacket & {
   registration_count: number;
+  active_registration_count: number;
   match_count: number;
   hold_count: number;
   waitlist_count: number;
@@ -34,9 +45,24 @@ async function getTournamentCounts(
   const [rows] = await connection.query<CountRow[]>(`
     SELECT
       (SELECT COUNT(*) FROM registrations WHERE tournament_id=? AND deleted_at IS NULL) AS registration_count,
+      (
+        SELECT COUNT(*)
+        FROM registrations
+        WHERE tournament_id=?
+          AND deleted_at IS NULL
+          AND status NOT IN ('CANCELLED','REJECTED','EXPIRED','NO_SHOW')
+      ) AS active_registration_count,
       (SELECT COUNT(*) FROM tournament_matches WHERE tournament_id=?) AS match_count,
-      (SELECT COUNT(*) FROM registration_holds WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()) AS hold_count,
-      (SELECT COUNT(*) FROM waitlist_entries WHERE tournament_id=? AND status IN ('WAITING','OFFERED')) AS waitlist_count,
+      (
+        SELECT COUNT(*)
+        FROM registration_holds
+        WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()
+      ) AS hold_count,
+      (
+        SELECT COUNT(*)
+        FROM waitlist_entries
+        WHERE tournament_id=? AND status IN ('WAITING','OFFERED')
+      ) AS waitlist_count,
       (
         SELECT COALESCE(SUM(
           CASE
@@ -62,6 +88,7 @@ async function getTournamentCounts(
         WHERE tournament_id=? AND status='OFFERED' AND offer_expires_at>NOW()
       ) AS occupied
   `, [
+    tournamentId,
     tournamentId,
     tournamentId,
     tournamentId,
@@ -106,7 +133,9 @@ export async function PATCH(
     try {
       await connection.beginTransaction();
       const [rows] = await connection.query<TournamentRow[]>(`
-        SELECT id,slug,title,status,capacity,game_id,participant_type,team_size,format,template_id
+        SELECT
+          id,slug,title,status,capacity,game_id,venue_id,participant_type,team_size,
+          format,draw_mode,has_third_place,starts_at,template_id
         FROM tournaments
         WHERE id=? AND deleted_at IS NULL
         LIMIT 1
@@ -120,13 +149,35 @@ export async function PATCH(
       }
 
       const counts = await getTournamentCounts(connection, id);
-      const structuralChanged = Number(old.game_id) !== input.gameId
+
+      if (!canChangeTournamentStatus(old.status, input.status)) {
+        await connection.rollback();
+        return NextResponse.json({
+          message: "این تغییر وضعیت از مرحله فعلی مسابقه مجاز نیست. مراحل قرعه، شروع و پایان مسابقه توسط خود سیستم مدیریت می‌شوند."
+        }, { status: 409 });
+      }
+
+      if (old.status !== input.status && input.status === "REGISTRATION_OPEN") {
+        if (Number(counts.match_count) > 0) {
+          await connection.rollback();
+          return NextResponse.json({
+            message: "پس از ساخت قرعه یا بازی‌ها، ثبت‌نام دوباره باز نمی‌شود."
+          }, { status: 409 });
+        }
+        const statusError = openRegistrationStatusError(input);
+        if (statusError) {
+          await connection.rollback();
+          return NextResponse.json({ message: statusError }, { status: 422 });
+        }
+      }
+
+      const registrationStructureChanged = Number(old.game_id) !== input.gameId
         || old.participant_type !== input.participantType
         || Number(old.team_size) !== input.teamSize
         || old.format !== input.format;
 
       if (
-        structuralChanged
+        registrationStructureChanged
         && (
           Number(counts.registration_count) > 0
           || Number(counts.match_count) > 0
@@ -136,7 +187,25 @@ export async function PATCH(
       ) {
         await connection.rollback();
         return NextResponse.json({
-          message: "پس از ایجاد ثبت‌نام، رزرو، صف انتظار یا بازی، ساختار مسابقه قابل تغییر نیست."
+          message: "پس از ایجاد ثبت‌نام، رزرو، صف انتظار یا بازی، بازی، فرمت و نوع شرکت‌کننده قابل تغییر نیستند."
+        }, { status: 409 });
+      }
+
+      const drawSettingsChanged = old.draw_mode !== input.drawMode
+        || Boolean(old.has_third_place) !== input.hasThirdPlace;
+      if (drawSettingsChanged && Number(counts.match_count) > 0) {
+        await connection.rollback();
+        return NextResponse.json({
+          message: "پس از ساخت قرعه، نوع قرعه و مسابقه رده‌بندی قابل تغییر نیستند."
+        }, { status: 409 });
+      }
+
+      const scheduleChanged = Number(old.venue_id || 0) !== Number(input.venueId || 0)
+        || new Date(old.starts_at).getTime() !== new Date(input.startsAt).getTime();
+      if (scheduleChanged && Number(counts.match_count) > 0) {
+        await connection.rollback();
+        return NextResponse.json({
+          message: "پس از ساخت بازی‌ها، محل و زمان شروع مسابقه را از بخش زمان‌بندی مدیریت کنید."
         }, { status: 409 });
       }
 
@@ -156,6 +225,36 @@ export async function PATCH(
         return NextResponse.json({
           message: "مسابقه دارای ثبت‌نام، رزرو یا صف انتظار را نمی‌توان به پیش‌نویس بازگرداند."
         }, { status: 409 });
+      }
+
+      if (old.status !== "CANCELLED" && input.status === "CANCELLED" && (
+        Number(counts.active_registration_count) > 0
+        || Number(counts.match_count) > 0
+        || Number(counts.hold_count) > 0
+        || Number(counts.waitlist_count) > 0
+      )) {
+        await connection.rollback();
+        return NextResponse.json({
+          message: "این مسابقه داده فعال دارد و نباید فقط با تغییر وضعیت لغو شود. ابتدا ثبت‌نام‌ها و بازی‌های مرتبط باید تعیین تکلیف شوند."
+        }, { status: 409 });
+      }
+
+      const [games] = await connection.query<RowDataPacket[]>(`
+        SELECT id FROM games WHERE id=? AND is_active=1 LIMIT 1
+      `, [input.gameId]);
+      if (!games[0]) {
+        await connection.rollback();
+        return NextResponse.json({ message: "بازی انتخاب‌شده فعال نیست." }, { status: 422 });
+      }
+
+      if (input.venueId) {
+        const [venues] = await connection.query<RowDataPacket[]>(`
+          SELECT id FROM venues WHERE id=? AND is_active=1 LIMIT 1
+        `, [input.venueId]);
+        if (!venues[0]) {
+          await connection.rollback();
+          return NextResponse.json({ message: "محل انتخاب‌شده فعال نیست." }, { status: 422 });
+        }
       }
 
       if (input.templateId) {
@@ -220,6 +319,10 @@ export async function PATCH(
         id
       ]);
 
+      if (input.capacity > Number(old.capacity)) {
+        await offerNextWaitlistEntries(connection, Number(id));
+      }
+
       await connection.commit();
     } catch (error) {
       await connection.rollback();
@@ -281,7 +384,7 @@ export async function DELETE(
     ) {
       await connection.rollback();
       return NextResponse.json({
-        message: "مسابقه دارای ثبت‌نام، رزرو، صف انتظار یا بازی قابل حذف نیست؛ وضعیت آن را لغوشده کنید."
+        message: "مسابقه دارای ثبت‌نام، رزرو، صف انتظار یا بازی قابل حذف نیست."
       }, { status: 409 });
     }
 

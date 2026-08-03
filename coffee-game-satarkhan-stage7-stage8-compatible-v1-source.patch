@@ -1,0 +1,3126 @@
+diff --git a/src/app/(public)/champions/page.tsx b/src/app/(public)/champions/page.tsx
+index 71c2320..46fd162 100644
+--- a/src/app/(public)/champions/page.tsx
++++ b/src/app/(public)/champions/page.tsx
+@@ -1,53 +1,40 @@
+-import { Trophy } from "lucide-react";
+-import type { RowDataPacket } from "mysql2";
++import { Medal, Trophy } from "lucide-react";
+ import { Card } from "@/components/ui/card";
+-import { queryRows } from "@/lib/db";
+-
+-type ChampionRow = RowDataPacket & {
+-  tournament_title: string;
+-  winner_name: string;
+-  completed_at: Date;
+-};
++import { listCompletedTournamentChampions } from "@/lib/tournament-completion";
+ 
+ export const dynamic = "force-dynamic";
+ 
+ export default async function Champions() {
+-  const champions = await queryRows<ChampionRow[]>(`
+-    SELECT
+-      t.title AS tournament_title,
+-      COALESCE(team.title,player.name,'برنده ثبت‌نشده') AS winner_name,
+-      m.completed_at
+-    FROM tournament_matches m
+-    JOIN tournaments t ON t.id=m.tournament_id
+-    LEFT JOIN tournament_rounds tr ON tr.id=m.round_id
+-    JOIN match_participants mp ON mp.match_id=m.id AND mp.slot=m.winner_slot
+-    LEFT JOIN teams team ON team.id=mp.team_id
+-    LEFT JOIN players player ON player.id=mp.player_id
+-    WHERE m.status='COMPLETED'
+-      AND m.winner_slot IS NOT NULL
+-      AND (tr.stage='FINAL' OR tr.title LIKE '%فینال%')
+-      AND t.deleted_at IS NULL
+-    ORDER BY m.completed_at DESC,m.id DESC
+-    LIMIT 30
+-  `);
++  const champions = await listCompletedTournamentChampions(30);
+ 
+   return (
+     <div className="page-shell">
+       <p className="section-kicker">HALL OF FAME</p>
+       <h1 className="section-title mt-2">قهرمانان Coffee Game</h1>
+-      <div className="mt-8 grid gap-5 md:grid-cols-3">
+-        {champions.map((item, index) => (
+-          <Card key={`${item.tournament_title}-${item.completed_at}-${index}`} className="p-7 text-center">
++      <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">
++        فقط مسابقه‌هایی نمایش داده می‌شوند که تمام بازی‌هایشان پایان یافته، اعتراض بازی باز ندارند و قهرمان نهایی آن‌ها مشخص است.
++      </p>
++      <div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
++        {champions.map((item) => (
++          <Card key={item.tournamentId} className="p-7 text-center">
+             <Trophy className="mx-auto text-amber-500" size={42} />
+-            <h2 className="mt-5 text-xl font-black">{item.winner_name}</h2>
+-            <p className="mt-2 text-sm text-[var(--muted)]">{item.tournament_title}</p>
+-            <time className="mt-2 block text-xs text-[var(--muted)]">
+-              {new Intl.DateTimeFormat("fa-IR", { dateStyle: "medium" }).format(new Date(item.completed_at))}
+-            </time>
++            <h2 className="mt-5 text-xl font-black">{item.champion?.name}</h2>
++            <p className="mt-2 text-sm text-[var(--muted)]">{item.title}</p>
++            <p className="mt-1 text-xs text-[var(--muted)]">{item.format}</p>
++            {item.runnerUp && (
++              <div className="mt-5 flex items-center justify-center gap-2 rounded-2xl bg-[var(--surface-2)] p-3 text-xs">
++                <Medal size={15} className="text-slate-400" />
++                نایب‌قهرمان: <strong>{item.runnerUp.name}</strong>
++              </div>
++            )}
+           </Card>
+         ))}
+       </div>
+-      {!champions.length && <Card className="mt-8 p-10 text-center text-[var(--muted)]">هنوز قهرمان نهایی ثبت نشده است.</Card>}
++      {!champions.length && (
++        <Card className="mt-8 p-10 text-center text-[var(--muted)]">
++          هنوز قهرمان نهایی بدون اعتراض باز ثبت نشده است.
++        </Card>
++      )}
+     </div>
+   );
+ }
+diff --git a/src/app/(public)/tournaments/[slug]/page.tsx b/src/app/(public)/tournaments/[slug]/page.tsx
+index c25ff72..167f063 100644
+--- a/src/app/(public)/tournaments/[slug]/page.tsx
++++ b/src/app/(public)/tournaments/[slug]/page.tsx
+@@ -19,6 +19,7 @@ import { queryRows } from "@/lib/db";
+ import { findTournament } from "@/lib/repositories/tournaments";
+ import { formatToman } from "@/lib/utils";
+ import { getRuntimeSettings } from "@/lib/runtime-settings";
++import { getTournamentCompletionSnapshot } from "@/lib/tournament-completion";
+ 
+ 
+ type TournamentMatchRow = RowDataPacket & {
+@@ -48,6 +49,10 @@ export default async function TournamentDetail({
+ 
+   if (!item) notFound();
+ 
++  const completion = item.statusCode === "COMPLETED"
++    ? await getTournamentCompletionSnapshot(Number(item.id))
++    : null;
++
+   const matches = await queryRows<TournamentMatchRow[]>(`
+     SELECT
+       m.id,m.match_number,m.status,m.scheduled_at,
+@@ -136,6 +141,17 @@ export default async function TournamentDetail({
+ 
+       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_400px]">
+         <div className="grid gap-6">
++          {completion?.champion && (
++            <Card className="border-amber-500/30 bg-amber-500/5 p-6 text-center">
++              <Trophy className="mx-auto text-amber-500" size={38} />
++              <p className="mt-3 text-xs text-[var(--muted)]">قهرمان نهایی مسابقه</p>
++              <h2 className="mt-1 text-2xl font-black">{completion.champion.name}</h2>
++              {completion.runnerUp && (
++                <p className="mt-2 text-sm text-[var(--muted)]">نایب‌قهرمان: {completion.runnerUp.name}</p>
++              )}
++            </Card>
++          )}
++
+           <Card className="p-6">
+             <h2 className="text-xl font-black">اطلاعات مسابقه</h2>
+             <div className="mt-5 grid gap-4 sm:grid-cols-2">
+diff --git a/src/app/admin/tournaments/[id]/completion/page.tsx b/src/app/admin/tournaments/[id]/completion/page.tsx
+new file mode 100644
+index 0000000..61a6daa
+--- /dev/null
++++ b/src/app/admin/tournaments/[id]/completion/page.tsx
+@@ -0,0 +1,24 @@
++import { TournamentCompletionManager } from "@/components/admin/tournament-completion-manager";
++import { requireAdminPage } from "@/lib/page-authorization";
++
++export const dynamic = "force-dynamic";
++
++export default async function TournamentCompletionPage({
++  params
++}: {
++  params: Promise<{ id: string }>;
++}) {
++  await requireAdminPage("tournaments.manage");
++  const { id } = await params;
++
++  return (
++    <div>
++      <p className="section-kicker">TOURNAMENT COMPLETION</p>
++      <h1 className="section-title mt-2">پایان مسابقه و تعیین قهرمان</h1>
++      <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--muted)]">
++        این صفحه بازی‌های باقی‌مانده، اعتراض‌های باز و نتیجه نهایی را بررسی می‌کند. مسابقه فقط وقتی پایان می‌یابد که قهرمان بدون ابهام مشخص باشد.
++      </p>
++      <TournamentCompletionManager tournamentId={id} />
++    </div>
++  );
++}
+diff --git a/src/app/api/admin/disputes/[id]/route.ts b/src/app/api/admin/disputes/[id]/route.ts
+index 6578313..10faf70 100644
+--- a/src/app/api/admin/disputes/[id]/route.ts
++++ b/src/app/api/admin/disputes/[id]/route.ts
+@@ -1,10 +1,105 @@
+-import { NextResponse } from "next/server";
+-import { z } from "zod";
+-import type { RowDataPacket } from "mysql2";
+-import { authorize } from "@/lib/authorization";
+-import { writeAuditLog } from "@/lib/audit";
+-import { db } from "@/lib/db";
+-import { createNotification } from "@/lib/notifications";
+-const schema=z.object({status:z.enum(["accepted","rejected","resolved"]),resolution:z.string().trim().min(3).max(3000)});
+-type Row=RowDataPacket&{id:number;submitted_by:number|null;status:string};
+-export async function PATCH(request:Request,{params}:{params:Promise<{id:string}>}){const auth=await authorize("matches.manage");if(auth.response)return auth.response;try{const input=schema.parse(await request.json());const{id}=await params;const connection=await db.getConnection();let old:Row|null=null;try{await connection.beginTransaction();const[rows]=await connection.query<Row[]>(`SELECT id,submitted_by,status FROM match_disputes WHERE id=? LIMIT 1 FOR UPDATE`,[id]);old=rows[0]||null;if(!old){await connection.rollback();return NextResponse.json({message:"اعتراض یافت نشد."},{status:404})}await connection.execute(`UPDATE match_disputes SET status=?,resolution=?,resolved_by=?,resolved_at=NOW() WHERE id=?`,[input.status,input.resolution,auth.user.id,id]);await createNotification({userId:old.submitted_by,type:"match_dispute_resolved",title:"پاسخ اعتراض ثبت شد",body:input.resolution,data:{disputeId:id,status:input.status},connection});await connection.commit()}catch(error){await connection.rollback();throw error}finally{connection.release()}await writeAuditLog({actorUserId:auth.user.id,action:"match.dispute_resolved",entityType:"match_dispute",entityId:id,oldData:old||undefined,newData:input,request});return NextResponse.json({ok:true})}catch(error){if(error instanceof z.ZodError)return NextResponse.json({message:"پاسخ اعتراض نامعتبر است."},{status:422});return NextResponse.json({message:"رسیدگی به اعتراض انجام نشد."},{status:500})}}
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import type { RowDataPacket } from "mysql2";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import { db } from "@/lib/db";
++import { createNotification } from "@/lib/notifications";
++import { advanceTournament, recalculateRankingsForTournament } from "@/lib/tournament-engine";
++
++const schema = z.object({
++  status: z.enum(["accepted", "rejected", "resolved"]),
++  resolution: z.string().trim().min(3).max(3000)
++});
++
++type DisputeRow = RowDataPacket & {
++  id: number;
++  match_id: number;
++  tournament_id: number;
++  submitted_by: number | null;
++  status: string;
++};
++
++export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
++  const auth = await authorize("matches.manage");
++  if (auth.response) return auth.response;
++
++  try {
++    const input = schema.parse(await request.json());
++    const { id } = await params;
++    if (!/^\d+$/.test(id)) {
++      return NextResponse.json({ message: "شناسه اعتراض نامعتبر است." }, { status: 400 });
++    }
++
++    const connection = await db.getConnection();
++    let old: DisputeRow | null = null;
++    try {
++      await connection.beginTransaction();
++      const [rows] = await connection.query<DisputeRow[]>(`
++        SELECT dispute.id,dispute.match_id,match_row.tournament_id,dispute.submitted_by,dispute.status
++        FROM match_disputes dispute
++        JOIN tournament_matches match_row ON match_row.id=dispute.match_id
++        WHERE dispute.id=?
++        LIMIT 1
++        FOR UPDATE
++      `, [id]);
++      old = rows[0] || null;
++      if (!old) {
++        await connection.rollback();
++        return NextResponse.json({ message: "اعتراض یافت نشد." }, { status: 404 });
++      }
++      if (old.status !== "open") {
++        await connection.rollback();
++        return NextResponse.json({ message: "این اعتراض قبلاً تعیین تکلیف شده است." }, { status: 409 });
++      }
++
++      await connection.execute(`
++        UPDATE match_disputes
++        SET status=?,resolution=?,resolved_by=?,resolved_at=NOW()
++        WHERE id=?
++      `, [input.status, input.resolution, auth.user.id, id]);
++
++      if (old.submitted_by) {
++        const acceptedHint = input.status === "accepted"
++          ? " اعتراض پذیرفته شد و مدیر نتیجه بازی را جداگانه اصلاح می‌کند."
++          : "";
++        await createNotification({
++          userId: old.submitted_by,
++          type: "match_dispute_resolved",
++          title: "پاسخ اعتراض ثبت شد",
++          body: `${input.resolution}${acceptedHint}`,
++          data: { disputeId: id, matchId: old.match_id, status: input.status },
++          connection
++        });
++      }
++      if (input.status !== "accepted") {
++        const advancement = await advanceTournament(connection, old.tournament_id);
++        if ((advancement as { completed?: boolean }).completed) {
++          await recalculateRankingsForTournament(connection, old.tournament_id);
++        }
++      }
++      await connection.commit();
++    } catch (error) {
++      await connection.rollback();
++      throw error;
++    } finally {
++      connection.release();
++    }
++
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: "match.dispute_resolved",
++      entityType: "match_dispute",
++      entityId: id,
++      oldData: old || undefined,
++      newData: input,
++      request
++    });
++    return NextResponse.json({ ok: true, matchId: old?.match_id ? String(old.match_id) : null });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({ message: "پاسخ اعتراض نامعتبر است.", errors: error.issues }, { status: 422 });
++    }
++    return NextResponse.json({ message: "رسیدگی به اعتراض انجام نشد." }, { status: 500 });
++  }
++}
+diff --git a/src/app/api/admin/matches/[id]/route.ts b/src/app/api/admin/matches/[id]/route.ts
+index d218c6f..a4070bb 100644
+--- a/src/app/api/admin/matches/[id]/route.ts
++++ b/src/app/api/admin/matches/[id]/route.ts
+@@ -1,272 +1,500 @@
+-import { NextResponse } from "next/server";
+-import { z } from "zod";
+-import type { RowDataPacket } from "mysql2";
+-import { authorize } from "@/lib/authorization";
+-import { hasPermission } from "@/lib/auth";
+-import { writeAuditLog } from "@/lib/audit";
+-import { db } from "@/lib/db";
+-import { getRequiredResourceType } from "@/lib/resource-type";
+-import { advanceTournament, recalculateRankingsForTournament } from "@/lib/tournament-engine";
+-
+-const schema = z.object({
+-  homeScore: z.coerce.number().int().min(0).max(999),
+-  awayScore: z.coerce.number().int().min(0).max(999),
+-  status: z.enum(["READY", "LIVE", "COMPLETED", "POSTPONED"]),
+-  notes: z.string().trim().max(1000).optional().nullable(),
+-  resourceId: z.coerce.number().int().positive().optional().nullable(),
+-  refereeUserId: z.coerce.number().int().positive().optional().nullable(),
+-  scheduledAt: z.string().datetime().optional().nullable(),
+-  durationMin: z.coerce.number().int().min(5).max(240).optional().nullable()
+-});
+-
+-type MatchRow = RowDataPacket & {
+-  id: number;
+-  tournament_id: number;
+-  round_id: number | null;
+-  status: string;
+-  home_score: number | null;
+-  away_score: number | null;
+-  referee_user_id: number | null;
+-  resource_id: number | null;
+-  scheduled_at: Date | null;
+-  duration_min: number | null;
+-  venue_id: number | null;
+-  starts_at: Date;
+-  ends_at: Date | null;
+-  game_slug: string;
+-  format: string;
+-  game_settings: unknown;
+-};
+-
+-function parseObject(value: unknown): Record<string, unknown> {
+-  try {
+-    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+-  } catch { return {}; }
+-}
+-
+-function allowsDraw(format: string, settings: Record<string, unknown>) {
+-  const normalized = format.toLowerCase();
+-  return settings.allowDraw === true
+-    || normalized.includes("رفت‌وبرگشت")
+-    || normalized.includes("رفت و برگشت")
+-    || normalized.includes("home and away")
+-    || normalized.includes("two leg")
+-    || normalized.includes("لیگ")
+-    || normalized.includes("group")
+-    || normalized.includes("گروه")
+-    || normalized.includes("swiss")
+-    || normalized.includes("سوئیس");
+-}
+-
+-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+-  const auth = await authorize("results.submit");
+-  if (auth.response) return auth.response;
+-
+-  try {
+-    const input = schema.parse(await request.json());
+-    const { id } = await params;
+-    if (!/^\d+$/.test(id)) return NextResponse.json({ message: "شناسه بازی نامعتبر است." }, { status: 400 });
+-    const canManageAll = hasPermission(auth.user, "matches.manage");
+-    const connection = await db.getConnection();
+-    let match: MatchRow | null = null;
+-    let winnerSlot: number | null = null;
+-    let advancement: unknown = null;
+-
+-    try {
+-      await connection.beginTransaction();
+-      const [rows] = await connection.query<MatchRow[]>(`
+-        SELECT m.id,m.tournament_id,m.round_id,m.status,m.home_score,m.away_score,m.referee_user_id,
+-               m.resource_id,m.scheduled_at,m.duration_min,t.venue_id,t.starts_at,t.ends_at,
+-               game.slug AS game_slug,t.format,t.game_settings
+-        FROM tournament_matches m
+-        JOIN tournaments t ON t.id=m.tournament_id
+-        JOIN games game ON game.id=t.game_id
+-        WHERE m.id=?
+-        LIMIT 1
+-        FOR UPDATE
+-      `, [id]);
+-      match = rows[0] || null;
+-      if (!match) {
+-        await connection.rollback();
+-        return NextResponse.json({ message: "بازی یافت نشد." }, { status: 404 });
+-      }
+-      if (!canManageAll && String(match.referee_user_id || "") !== auth.user.id) {
+-        await connection.rollback();
+-        return NextResponse.json({ message: "این بازی به شما تخصیص داده نشده است." }, { status: 403 });
+-      }
+-      if (!canManageAll && match.status === "COMPLETED") {
+-        await connection.rollback();
+-        return NextResponse.json({ message: "نتیجه نهایی فقط توسط مدیر قابل اصلاح است." }, { status: 409 });
+-      }
+-
+-      if (match.status === "COMPLETED") {
+-        const [laterRows] = await connection.query<RowDataPacket[]>(`
+-          SELECT next_match.id
+-          FROM tournament_matches current_match
+-          JOIN tournament_rounds current_round ON current_round.id=current_match.round_id
+-          JOIN tournament_matches next_match ON next_match.tournament_id=current_match.tournament_id
+-          JOIN tournament_rounds next_round ON next_round.id=next_match.round_id
+-          WHERE current_match.id=? AND next_round.round_number>current_round.round_number
+-          LIMIT 1
+-        `, [id]);
+-        if (laterRows[0]) {
+-          await connection.rollback();
+-          return NextResponse.json({ message: "پس از ایجاد دور بعد، نتیجه این بازی قابل تغییر نیست." }, { status: 409 });
+-        }
+-      }
+-
+-      const settings = parseObject(match.game_settings);
+-      const maxScore = Number.isFinite(Number(settings.maxScore)) ? Math.max(1, Math.min(999, Number(settings.maxScore))) : 999;
+-      if (input.homeScore > maxScore || input.awayScore > maxScore) {
+-        await connection.rollback();
+-        return NextResponse.json({ message: `امتیاز نمی‌تواند بیشتر از ${maxScore.toLocaleString("fa-IR")} باشد.` }, { status: 422 });
+-      }
+-      if (input.status === "COMPLETED" && input.homeScore === input.awayScore && !allowsDraw(match.format, settings)) {
+-        await connection.rollback();
+-        return NextResponse.json({ message: "این فرمت مسابقه با نتیجه مساوی قابل پایان نیست." }, { status: 422 });
+-      }
+-
+-      const scheduledAt = canManageAll
+-        ? (input.scheduledAt ? new Date(input.scheduledAt) : null)
+-        : match.scheduled_at;
+-      const durationMin = canManageAll ? (input.durationMin || 30) : (match.duration_min || 30);
+-      const resourceId = canManageAll ? (input.resourceId || null) : match.resource_id;
+-      const refereeUserId = canManageAll ? (input.refereeUserId || null) : match.referee_user_id;
+-
+-      if (["READY", "LIVE"].includes(input.status) && (!scheduledAt || !resourceId)) {
+-        throw new Error("SCHEDULE_REQUIRED");
+-      }
+-
+-      if (canManageAll) {
+-        if (scheduledAt) {
+-          const scheduledEnd = scheduledAt.getTime() + durationMin * 60_000;
+-          if (scheduledAt.getTime() < new Date(match.starts_at).getTime()) {
+-            throw new Error("SCHEDULE_BEFORE_TOURNAMENT");
+-          }
+-          if (match.ends_at && scheduledEnd > new Date(match.ends_at).getTime()) {
+-            throw new Error("SCHEDULE_AFTER_TOURNAMENT");
+-          }
+-        }
+-        if (resourceId) {
+-          if (!match.venue_id) throw new Error("TOURNAMENT_VENUE_REQUIRED");
+-          const [resourceRows] = await connection.query<RowDataPacket[]>(`
+-            SELECT id
+-            FROM resources
+-            WHERE id=? AND venue_id=? AND is_active=1 AND status='available' AND LOWER(type)=?
+-            LIMIT 1
+-          `, [resourceId, match.venue_id, getRequiredResourceType(match.game_slug, settings)]);
+-          if (!resourceRows[0]) throw new Error("INVALID_RESOURCE");
+-        }
+-        if (refereeUserId) {
+-          const [refereeRows] = await connection.query<RowDataPacket[]>(`
+-            SELECT DISTINCT user.id
+-            FROM users user
+-            JOIN user_roles user_role ON user_role.user_id=user.id
+-            JOIN roles role ON role.id=user_role.role_id
+-            WHERE user.id=? AND user.status='ACTIVE' AND user.deleted_at IS NULL
+-              AND role.name IN ('referee','operator','manager','super_admin')
+-            LIMIT 1
+-          `, [refereeUserId]);
+-          if (!refereeRows[0]) throw new Error("INVALID_REFEREE");
+-        }
+-      }
+-
+-      if (scheduledAt) {
+-        if (resourceId) {
+-          const [resourceConflict] = await connection.query<RowDataPacket[]>(`
+-            SELECT id FROM tournament_matches
+-            WHERE id<>? AND resource_id=? AND status NOT IN ('CANCELLED','COMPLETED')
+-              AND scheduled_at IS NOT NULL
+-              AND scheduled_at < DATE_ADD(?,INTERVAL ? MINUTE)
+-              AND DATE_ADD(scheduled_at,INTERVAL COALESCE(duration_min,30) MINUTE) > ?
+-            LIMIT 1
+-          `, [id, resourceId, scheduledAt, durationMin, scheduledAt]);
+-          if (resourceConflict[0]) throw new Error("RESOURCE_CONFLICT");
+-        }
+-        if (refereeUserId) {
+-          const [refereeConflict] = await connection.query<RowDataPacket[]>(`
+-            SELECT id FROM tournament_matches
+-            WHERE id<>? AND referee_user_id=? AND status NOT IN ('CANCELLED','COMPLETED')
+-              AND scheduled_at IS NOT NULL
+-              AND scheduled_at < DATE_ADD(?,INTERVAL ? MINUTE)
+-              AND DATE_ADD(scheduled_at,INTERVAL COALESCE(duration_min,30) MINUTE) > ?
+-            LIMIT 1
+-          `, [id, refereeUserId, scheduledAt, durationMin, scheduledAt]);
+-          if (refereeConflict[0]) throw new Error("REFEREE_CONFLICT");
+-        }
+-        const [participantConflict] = await connection.query<RowDataPacket[]>(`
+-          SELECT other.id
+-          FROM match_participants current_participant
+-          JOIN match_participants other_participant
+-            ON (other_participant.player_id<=>current_participant.player_id)
+-           AND (other_participant.team_id<=>current_participant.team_id)
+-          JOIN tournament_matches other ON other.id=other_participant.match_id
+-          WHERE current_participant.match_id=? AND other.id<>?
+-            AND other.status NOT IN ('CANCELLED','COMPLETED')
+-            AND other.scheduled_at IS NOT NULL
+-            AND other.scheduled_at < DATE_ADD(?,INTERVAL ? MINUTE)
+-            AND DATE_ADD(other.scheduled_at,INTERVAL COALESCE(other.duration_min,30) MINUTE) > ?
+-          LIMIT 1
+-        `, [id, id, scheduledAt, durationMin, scheduledAt]);
+-        if (participantConflict[0]) throw new Error("PARTICIPANT_CONFLICT");
+-      }
+-
+-      winnerSlot = input.status === "COMPLETED" && input.homeScore !== input.awayScore
+-        ? (input.homeScore > input.awayScore ? 1 : 2)
+-        : null;
+-
+-      await connection.execute(`
+-        UPDATE tournament_matches
+-        SET home_score=?,away_score=?,status=?,winner_slot=?,notes=?,resource_id=?,referee_user_id=?,scheduled_at=?,duration_min=?,
+-            started_at=IF(?='LIVE' AND started_at IS NULL,NOW(),started_at),
+-            completed_at=IF(?='COMPLETED',NOW(),NULL)
+-        WHERE id=?
+-      `, [
+-        input.homeScore, input.awayScore, input.status, winnerSlot, input.notes || null,
+-        resourceId, refereeUserId, scheduledAt, durationMin,
+-        input.status, input.status, id
+-      ]);
+-      await connection.execute(`UPDATE match_participants SET is_winner=0 WHERE match_id=?`, [id]);
+-      if (winnerSlot) await connection.execute(`UPDATE match_participants SET is_winner=1 WHERE match_id=? AND slot=?`, [id, winnerSlot]);
+-      if (input.status === "LIVE") await connection.execute(`UPDATE tournaments SET status='RUNNING' WHERE id=? AND status<>'COMPLETED'`, [match.tournament_id]);
+-      if (input.status === "COMPLETED") {
+-        advancement = await advanceTournament(connection, match.tournament_id);
+-        await recalculateRankingsForTournament(connection, match.tournament_id);
+-      }
+-      await connection.commit();
+-    } catch (error) {
+-      await connection.rollback();
+-      throw error;
+-    } finally {
+-      connection.release();
+-    }
+-
+-    await writeAuditLog({
+-      actorUserId: auth.user.id,
+-      action: "match.updated",
+-      entityType: "tournament_match",
+-      entityId: id,
+-      oldData: match ? { status: match.status, homeScore: match.home_score, awayScore: match.away_score } : undefined,
+-      newData: input,
+-      request
+-    });
+-    return NextResponse.json({ ok: true, winnerSlot, advancement });
+-  } catch (error) {
+-    if (error instanceof z.ZodError) return NextResponse.json({ message: "اطلاعات بازی نامعتبر است.", errors: error.issues }, { status: 422 });
+-    const code = error instanceof Error ? error.message : "";
+-    const messages: Record<string, string> = {
+-      RESOURCE_CONFLICT: "منبع انتخاب‌شده در این بازه زمانی مشغول است.",
+-      REFEREE_CONFLICT: "داور انتخاب‌شده در این بازه بازی دیگری دارد.",
+-      PARTICIPANT_CONFLICT: "یکی از شرکت‌کنندگان در این بازه بازی دیگری دارد.",
+-      SCHEDULE_REQUIRED: "برای وضعیت آماده یا زنده، زمان و میز/دستگاه را تعیین کن.",
+-      SCHEDULE_BEFORE_TOURNAMENT: "زمان بازی نمی‌تواند قبل از شروع مسابقه باشد.",
+-      SCHEDULE_AFTER_TOURNAMENT: "زمان بازی از پایان تعیین‌شده مسابقه عبور می‌کند.",
+-      TOURNAMENT_VENUE_REQUIRED: "برای مسابقه محل برگزاری تعیین نشده است.",
+-      INVALID_RESOURCE: "میز یا دستگاه انتخاب‌شده با محل و نوع بازی سازگار نیست.",
+-      INVALID_REFEREE: "داور انتخاب‌شده فعال یا مجاز نیست.",
+-      AGGREGATE_TIE: "مجموع نتیجه رفت‌وبرگشت مساوی است و باید نتیجه تعیین‌کننده ثبت شود."
+-    };
+-    return NextResponse.json({ message: messages[code] || "ذخیره بازی انجام نشد." }, { status: messages[code] ? 409 : 500 });
+-  }
+-}
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import type { RowDataPacket } from "mysql2";
++import { authorize } from "@/lib/authorization";
++import { hasPermission } from "@/lib/auth";
++import { writeAuditLog } from "@/lib/audit";
++import { db } from "@/lib/db";
++import { getMatchResultRules } from "@/lib/match-rules";
++import { advanceTournament, recalculateRankingsForTournament } from "@/lib/tournament-engine";
++
++const nullableId = z.coerce.number().int().positive().nullable().optional();
++const nullableDateTime = z.string().datetime().nullable().optional();
++const score = z.coerce.number().int().min(0).max(999);
++
++const schema = z.discriminatedUnion("action", [
++  z.object({
++    action: z.literal("setup"),
++    resourceId: nullableId,
++    refereeUserId: nullableId,
++    scheduledAt: nullableDateTime,
++    durationMin: z.coerce.number().int().min(5).max(240),
++    notes: z.string().trim().max(1000).nullable().optional()
++  }),
++  z.object({ action: z.literal("start") }),
++  z.object({ action: z.literal("ready") }),
++  z.object({
++    action: z.literal("score"),
++    homeScore: score,
++    awayScore: score,
++    notes: z.string().trim().max(1000).nullable().optional()
++  }),
++  z.object({
++    action: z.literal("complete"),
++    homeScore: score,
++    awayScore: score,
++    notes: z.string().trim().max(1000).nullable().optional()
++  }),
++  z.object({
++    action: z.literal("postpone"),
++    reason: z.string().trim().min(3).max(1000)
++  }),
++  z.object({
++    action: z.literal("correct"),
++    homeScore: score,
++    awayScore: score,
++    reason: z.string().trim().min(3).max(1000)
++  })
++]);
++
++type MatchRow = RowDataPacket & {
++  id: number;
++  tournament_id: number;
++  round_id: number | null;
++  round_number: number | null;
++  round_stage: string | null;
++  status: string;
++  home_score: number | null;
++  away_score: number | null;
++  winner_slot: number | null;
++  referee_user_id: number | null;
++  resource_id: number | null;
++  scheduled_at: Date | null;
++  started_at: Date | null;
++  completed_at: Date | null;
++  duration_min: number | null;
++  format: string;
++  game_settings: unknown;
++  venue_id: number | null;
++  tournament_status: string;
++};
++
++type ParticipantRow = RowDataPacket & {
++  id: number;
++  slot: number;
++  player_id: number | null;
++  team_id: number | null;
++};
++
++type LaterMatchRow = RowDataPacket & {
++  id: number;
++  status: string;
++  started_at: Date | null;
++  completed_at: Date | null;
++};
++
++function participantKey(participant: Pick<ParticipantRow, "player_id" | "team_id"> | undefined) {
++  if (!participant) return "";
++  if (participant.player_id) return `p:${participant.player_id}`;
++  if (participant.team_id) return `t:${participant.team_id}`;
++  return "";
++}
++
++function winnerSlot(homeScore: number, awayScore: number) {
++  if (homeScore === awayScore) return null;
++  return homeScore > awayScore ? 1 : 2;
++}
++
++async function hasOpenDispute(connection: Awaited<ReturnType<typeof db.getConnection>>, matchId: number) {
++  const [rows] = await connection.query<RowDataPacket[]>(`
++    SELECT id FROM match_disputes WHERE match_id=? AND status='open' LIMIT 1
++  `, [matchId]);
++  return Boolean(rows[0]);
++}
++
++function validateResult(
++  format: string,
++  settings: unknown,
++  homeScore: number,
++  awayScore: number,
++  finalResult: boolean
++) {
++  const rules = getMatchResultRules(format, settings);
++  if (homeScore > rules.maxScore || awayScore > rules.maxScore) {
++    throw new Error(`SCORE_OVER_MAX:${rules.maxScore}`);
++  }
++  if (finalResult && homeScore === awayScore && !rules.allowDraw) {
++    throw new Error("DRAW_NOT_ALLOWED");
++  }
++  if (
++    finalResult
++    && rules.targetScore
++    && Math.max(homeScore, awayScore) < rules.targetScore
++  ) {
++    throw new Error(`TARGET_SCORE_NOT_REACHED:${rules.targetScore}`);
++  }
++  return { rules, winner: finalResult ? winnerSlot(homeScore, awayScore) : null };
++}
++
++async function updateWinnerFlags(
++  connection: Awaited<ReturnType<typeof db.getConnection>>,
++  matchId: number,
++  slot: number | null
++) {
++  await connection.execute(`UPDATE match_participants SET is_winner=0 WHERE match_id=?`, [matchId]);
++  if (slot) {
++    await connection.execute(`
++      UPDATE match_participants SET is_winner=1 WHERE match_id=? AND slot=?
++    `, [matchId, slot]);
++  }
++}
++
++async function propagateKnockoutCorrection(
++  connection: Awaited<ReturnType<typeof db.getConnection>>,
++  match: MatchRow,
++  participants: ParticipantRow[],
++  newWinnerSlot: number | null
++) {
++  if (!match.round_id || !match.round_number || !match.winner_slot || !newWinnerSlot) return;
++  if (match.winner_slot === newWinnerSlot) return;
++
++  const [laterMatches] = await connection.query<LaterMatchRow[]>(`
++    SELECT next_match.id,next_match.status,next_match.started_at,next_match.completed_at
++    FROM tournament_matches next_match
++    JOIN tournament_rounds next_round ON next_round.id=next_match.round_id
++    WHERE next_match.tournament_id=? AND next_round.round_number>?
++    FOR UPDATE
++  `, [match.tournament_id, match.round_number]);
++
++  if (laterMatches.some((item) => item.started_at || item.completed_at || ["LIVE", "COMPLETED"].includes(item.status))) {
++    throw new Error("DEPENDENT_MATCH_ALREADY_STARTED");
++  }
++  if (!laterMatches.length) return;
++
++  const normalizedFormat = match.format.toLowerCase();
++  const isTwoLeg = normalizedFormat.includes("رفت‌وبرگشت")
++    || normalizedFormat.includes("رفت و برگشت")
++    || normalizedFormat.includes("two leg")
++    || normalizedFormat.includes("home and away");
++  if (isTwoLeg) throw new Error("DEPENDENT_ROUND_ALREADY_CREATED");
++
++  const oldWinner = participants.find((item) => item.slot === match.winner_slot);
++  const oldLoser = participants.find((item) => item.slot !== match.winner_slot);
++  const newWinner = participants.find((item) => item.slot === newWinnerSlot);
++  const newLoser = participants.find((item) => item.slot !== newWinnerSlot);
++  const oldWinnerKey = participantKey(oldWinner);
++  const oldLoserKey = participantKey(oldLoser);
++  if (!oldWinnerKey || !oldLoserKey || !newWinner || !newLoser) return;
++
++  const laterIds = laterMatches.map((item) => item.id);
++  const placeholders = laterIds.map(() => "?").join(",");
++  const [laterParticipants] = await connection.query<ParticipantRow[]>(`
++    SELECT id,slot,player_id,team_id
++    FROM match_participants
++    WHERE match_id IN (${placeholders})
++    FOR UPDATE
++  `, laterIds);
++
++  for (const participant of laterParticipants) {
++    const key = participantKey(participant);
++    const replacement = key === oldWinnerKey
++      ? newWinner
++      : key === oldLoserKey
++        ? newLoser
++        : null;
++    if (!replacement) continue;
++    await connection.execute(`
++      UPDATE match_participants SET player_id=?,team_id=?,is_winner=0 WHERE id=?
++    `, [replacement.player_id, replacement.team_id, participant.id]);
++  }
++}
++
++async function ensureCorrectionIsSafe(
++  connection: Awaited<ReturnType<typeof db.getConnection>>,
++  match: MatchRow,
++  participants: ParticipantRow[],
++  newWinnerSlot: number | null
++) {
++  const rules = getMatchResultRules(match.format, match.game_settings);
++  if (rules.category === "league") return;
++
++  if (rules.category === "group") {
++    const [knockout] = await connection.query<RowDataPacket[]>(`
++      SELECT match_row.id
++      FROM tournament_matches match_row
++      JOIN tournament_rounds round_row ON round_row.id=match_row.round_id
++      WHERE match_row.tournament_id=? AND round_row.stage IN ('knockout','third_place')
++      LIMIT 1
++    `, [match.tournament_id]);
++    if (knockout[0]) throw new Error("DEPENDENT_ROUND_ALREADY_CREATED");
++    return;
++  }
++
++  if (rules.category === "swiss" || rules.category === "double") {
++    if (!match.round_number) return;
++    const [later] = await connection.query<RowDataPacket[]>(`
++      SELECT next_match.id
++      FROM tournament_matches next_match
++      JOIN tournament_rounds next_round ON next_round.id=next_match.round_id
++      WHERE next_match.tournament_id=? AND next_round.round_number>?
++      LIMIT 1
++    `, [match.tournament_id, match.round_number]);
++    if (later[0]) throw new Error("DEPENDENT_ROUND_ALREADY_CREATED");
++    return;
++  }
++
++  await propagateKnockoutCorrection(connection, match, participants, newWinnerSlot);
++}
++
++export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
++  const auth = await authorize("results.submit");
++  if (auth.response) return auth.response;
++
++  try {
++    const input = schema.parse(await request.json());
++    const { id } = await params;
++    if (!/^\d+$/.test(id)) {
++      return NextResponse.json({ message: "شناسه بازی نامعتبر است." }, { status: 400 });
++    }
++
++    const canManageAll = hasPermission(auth.user, "matches.manage");
++    const connection = await db.getConnection();
++    let match: MatchRow | null = null;
++    let resultWinner: number | null = null;
++    let advancement: unknown = null;
++
++    try {
++      await connection.beginTransaction();
++      const [rows] = await connection.query<MatchRow[]>(`
++        SELECT match_row.id,match_row.tournament_id,match_row.round_id,round_row.round_number,
++               round_row.stage AS round_stage,match_row.status,match_row.home_score,match_row.away_score,
++               match_row.winner_slot,match_row.referee_user_id,match_row.resource_id,match_row.scheduled_at,
++               match_row.started_at,match_row.completed_at,match_row.duration_min,
++               tournament.format,tournament.game_settings,tournament.venue_id,
++               tournament.status AS tournament_status
++        FROM tournament_matches match_row
++        JOIN tournaments tournament ON tournament.id=match_row.tournament_id
++        LEFT JOIN tournament_rounds round_row ON round_row.id=match_row.round_id
++        WHERE match_row.id=?
++        LIMIT 1
++        FOR UPDATE
++      `, [id]);
++      match = rows[0] || null;
++      if (!match) {
++        await connection.rollback();
++        return NextResponse.json({ message: "بازی یافت نشد." }, { status: 404 });
++      }
++      if (!canManageAll && String(match.referee_user_id || "") !== auth.user.id) {
++        await connection.rollback();
++        return NextResponse.json({ message: "این بازی به شما تخصیص داده نشده است." }, { status: 403 });
++      }
++
++      const [participants] = await connection.query<ParticipantRow[]>(`
++        SELECT id,slot,player_id,team_id
++        FROM match_participants
++        WHERE match_id=?
++        ORDER BY slot
++        FOR UPDATE
++      `, [id]);
++      const hasTwoParticipants = participants.filter((item) => participantKey(item)).length === 2;
++      const openDispute = await hasOpenDispute(connection, match.id);
++
++      if (input.action === "setup") {
++        if (!canManageAll) throw new Error("MANAGER_ONLY_ACTION");
++        if (!["PENDING", "READY", "POSTPONED"].includes(match.status)) {
++          throw new Error("MATCH_SETUP_LOCKED");
++        }
++        const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : null;
++        const resourceId = input.resourceId || null;
++        const refereeUserId = input.refereeUserId || null;
++
++        if (resourceId) {
++          const [resources] = await connection.query<RowDataPacket[]>(`
++            SELECT resource.id
++            FROM resources resource
++            WHERE resource.id=? AND resource.is_active=1 AND resource.status='available'
++              AND (? IS NULL OR resource.venue_id=?)
++            LIMIT 1
++          `, [resourceId, match.venue_id, match.venue_id]);
++          if (!resources[0]) throw new Error("INVALID_RESOURCE");
++        }
++
++        if (scheduledAt && resourceId) {
++          const [resourceConflict] = await connection.query<RowDataPacket[]>(`
++            SELECT id FROM tournament_matches
++            WHERE id<>? AND resource_id=? AND status NOT IN ('CANCELLED','COMPLETED')
++              AND scheduled_at IS NOT NULL
++              AND scheduled_at < DATE_ADD(?,INTERVAL ? MINUTE)
++              AND DATE_ADD(scheduled_at,INTERVAL COALESCE(duration_min,30) MINUTE) > ?
++            LIMIT 1
++          `, [id, resourceId, scheduledAt, input.durationMin, scheduledAt]);
++          if (resourceConflict[0]) throw new Error("RESOURCE_CONFLICT");
++        }
++        if (scheduledAt && refereeUserId) {
++          const [refereeConflict] = await connection.query<RowDataPacket[]>(`
++            SELECT id FROM tournament_matches
++            WHERE id<>? AND referee_user_id=? AND status NOT IN ('CANCELLED','COMPLETED')
++              AND scheduled_at IS NOT NULL
++              AND scheduled_at < DATE_ADD(?,INTERVAL ? MINUTE)
++              AND DATE_ADD(scheduled_at,INTERVAL COALESCE(duration_min,30) MINUTE) > ?
++            LIMIT 1
++          `, [id, refereeUserId, scheduledAt, input.durationMin, scheduledAt]);
++          if (refereeConflict[0]) throw new Error("REFEREE_CONFLICT");
++        }
++        if (scheduledAt) {
++          const [participantConflict] = await connection.query<RowDataPacket[]>(`
++            SELECT other.id
++            FROM match_participants current_participant
++            JOIN match_participants other_participant
++              ON (other_participant.player_id<=>current_participant.player_id)
++             AND (other_participant.team_id<=>current_participant.team_id)
++            JOIN tournament_matches other ON other.id=other_participant.match_id
++            WHERE current_participant.match_id=? AND other.id<>?
++              AND other.status NOT IN ('CANCELLED','COMPLETED')
++              AND other.scheduled_at IS NOT NULL
++              AND other.scheduled_at < DATE_ADD(?,INTERVAL ? MINUTE)
++              AND DATE_ADD(other.scheduled_at,INTERVAL COALESCE(other.duration_min,30) MINUTE) > ?
++            LIMIT 1
++          `, [id, id, scheduledAt, input.durationMin, scheduledAt]);
++          if (participantConflict[0]) throw new Error("PARTICIPANT_CONFLICT");
++        }
++
++        const nextStatus = hasTwoParticipants && scheduledAt && resourceId ? "READY" : "PENDING";
++        await connection.execute(`
++          UPDATE tournament_matches
++          SET resource_id=?,referee_user_id=?,scheduled_at=?,duration_min=?,notes=?,status=?
++          WHERE id=?
++        `, [resourceId, refereeUserId, scheduledAt, input.durationMin, input.notes || null, nextStatus, id]);
++      }
++
++      if (input.action === "start") {
++        if (!["READY", "POSTPONED"].includes(match.status)) throw new Error("MATCH_CANNOT_START");
++        if (!hasTwoParticipants) throw new Error("MATCH_PARTICIPANTS_INCOMPLETE");
++        if (!match.scheduled_at || !match.resource_id) throw new Error("MATCH_SETUP_INCOMPLETE");
++        if (openDispute) throw new Error("OPEN_DISPUTE_EXISTS");
++        await connection.execute(`
++          UPDATE tournament_matches
++          SET status='LIVE',started_at=COALESCE(started_at,NOW()),completed_at=NULL
++          WHERE id=?
++        `, [id]);
++        await connection.execute(`
++          UPDATE tournaments SET status='RUNNING',updated_at=NOW()
++          WHERE id=? AND status NOT IN ('COMPLETED','CANCELLED')
++        `, [match.tournament_id]);
++      }
++
++      if (input.action === "ready") {
++        if (match.status !== "POSTPONED") throw new Error("MATCH_CANNOT_BE_READY");
++        if (!hasTwoParticipants) throw new Error("MATCH_PARTICIPANTS_INCOMPLETE");
++        if (!match.scheduled_at || !match.resource_id) throw new Error("MATCH_SETUP_INCOMPLETE");
++        if (openDispute) throw new Error("OPEN_DISPUTE_EXISTS");
++        await connection.execute(`UPDATE tournament_matches SET status='READY' WHERE id=?`, [id]);
++      }
++
++      if (input.action === "score") {
++        if (match.status !== "LIVE") throw new Error("MATCH_NOT_LIVE");
++        validateResult(match.format, match.game_settings, input.homeScore, input.awayScore, false);
++        await connection.execute(`
++          UPDATE tournament_matches SET home_score=?,away_score=?,notes=? WHERE id=?
++        `, [input.homeScore, input.awayScore, input.notes || null, id]);
++      }
++
++      if (input.action === "complete") {
++        if (match.status !== "LIVE") throw new Error("MATCH_NOT_LIVE");
++        if (!hasTwoParticipants) throw new Error("MATCH_PARTICIPANTS_INCOMPLETE");
++        if (openDispute) throw new Error("OPEN_DISPUTE_EXISTS");
++        const result = validateResult(match.format, match.game_settings, input.homeScore, input.awayScore, true);
++        resultWinner = result.winner;
++        await connection.execute(`
++          UPDATE tournament_matches
++          SET home_score=?,away_score=?,status='COMPLETED',winner_slot=?,notes=?,completed_at=NOW()
++          WHERE id=?
++        `, [input.homeScore, input.awayScore, resultWinner, input.notes || null, id]);
++        await updateWinnerFlags(connection, match.id, resultWinner);
++        advancement = await advanceTournament(connection, match.tournament_id);
++        await recalculateRankingsForTournament(connection, match.tournament_id);
++      }
++
++      if (input.action === "postpone") {
++        if (!["READY", "LIVE"].includes(match.status)) throw new Error("MATCH_CANNOT_BE_POSTPONED");
++        await connection.execute(`
++          UPDATE tournament_matches SET status='POSTPONED',notes=? WHERE id=?
++        `, [input.reason, id]);
++      }
++
++      if (input.action === "correct") {
++        if (!canManageAll) throw new Error("MANAGER_ONLY_ACTION");
++        if (match.status !== "COMPLETED") throw new Error("MATCH_NOT_COMPLETED");
++        if (!hasTwoParticipants) throw new Error("AUTOMATIC_BYE_RESULT");
++        if (openDispute) throw new Error("OPEN_DISPUTE_EXISTS");
++        const result = validateResult(match.format, match.game_settings, input.homeScore, input.awayScore, true);
++        resultWinner = result.winner;
++        await ensureCorrectionIsSafe(connection, match, participants, resultWinner);
++        await connection.execute(`
++          UPDATE tournament_matches
++          SET home_score=?,away_score=?,winner_slot=?,notes=?
++          WHERE id=?
++        `, [input.homeScore, input.awayScore, resultWinner, input.reason, id]);
++        await updateWinnerFlags(connection, match.id, resultWinner);
++        await connection.execute(`
++          UPDATE match_disputes
++          SET status='resolved',
++              resolution=CONCAT(COALESCE(resolution,''),'\nنتیجه نهایی توسط مدیر اصلاح شد.'),
++              resolved_by=?,resolved_at=NOW()
++          WHERE match_id=? AND status='accepted'
++        `, [auth.user.id, match.id]);
++        advancement = await advanceTournament(connection, match.tournament_id);
++        await recalculateRankingsForTournament(connection, match.tournament_id);
++      }
++
++      await connection.commit();
++    } catch (error) {
++      await connection.rollback();
++      throw error;
++    } finally {
++      connection.release();
++    }
++
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: `match.${input.action}`,
++      entityType: "tournament_match",
++      entityId: id,
++      oldData: match ? {
++        status: match.status,
++        homeScore: match.home_score,
++        awayScore: match.away_score,
++        winnerSlot: match.winner_slot
++      } : undefined,
++      newData: input,
++      request
++    });
++    return NextResponse.json({ ok: true, action: input.action, winnerSlot: resultWinner, advancement });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({ message: "اطلاعات بازی نامعتبر است.", errors: error.issues }, { status: 422 });
++    }
++    const code = error instanceof Error ? error.message : "";
++    if (code.startsWith("SCORE_OVER_MAX:")) {
++      return NextResponse.json({ message: `امتیاز نمی‌تواند بیشتر از ${Number(code.split(":")[1]).toLocaleString("fa-IR")} باشد.` }, { status: 422 });
++    }
++    if (code.startsWith("TARGET_SCORE_NOT_REACHED:")) {
++      return NextResponse.json({ message: `برای پایان بازی، یکی از طرفین باید حداقل به امتیاز ${Number(code.split(":")[1]).toLocaleString("fa-IR")} برسد.` }, { status: 422 });
++    }
++    const messages: Record<string, string> = {
++      MANAGER_ONLY_ACTION: "این عملیات فقط توسط مدیر مسابقات قابل انجام است.",
++      MATCH_SETUP_LOCKED: "پس از شروع یا پایان بازی، تنظیمات زمان‌بندی قابل تغییر نیست.",
++      MATCH_CANNOT_START: "فقط بازی آماده یا به‌تعویق‌افتاده قابل شروع است.",
++      MATCH_CANNOT_BE_READY: "فقط بازی به‌تعویق‌افتاده را می‌توان به حالت آماده بازگرداند.",
++      MATCH_NOT_LIVE: "برای ثبت امتیاز یا پایان بازی، ابتدا بازی را شروع کنید.",
++      MATCH_NOT_COMPLETED: "فقط نتیجه بازی پایان‌یافته قابل اصلاح است.",
++      MATCH_CANNOT_BE_POSTPONED: "فقط بازی آماده یا در حال برگزاری قابل تعویق است.",
++      MATCH_PARTICIPANTS_INCOMPLETE: "هر دو شرکت‌کننده بازی باید مشخص باشند.",
++      MATCH_SETUP_INCOMPLETE: "قبل از شروع، زمان و میز یا دستگاه بازی را مشخص کنید.",
++      OPEN_DISPUTE_EXISTS: "ابتدا اعتراض باز این بازی را تعیین تکلیف کنید.",
++      DRAW_NOT_ALLOWED: "این مسابقه با نتیجه مساوی قابل پایان نیست.",
++      AUTOMATIC_BYE_RESULT: "نتیجه بازی Bye خودکار قابل ویرایش نیست.",
++      DEPENDENT_MATCH_ALREADY_STARTED: "بازی وابسته مرحله بعد شروع شده و تغییر برنده این بازی امن نیست.",
++      DEPENDENT_ROUND_ALREADY_CREATED: "مرحله بعد بر اساس این نتیجه ساخته شده و نتیجه دیگر قابل اصلاح نیست.",
++      INVALID_RESOURCE: "میز یا دستگاه انتخاب‌شده فعال یا متعلق به محل مسابقه نیست.",
++      RESOURCE_CONFLICT: "میز یا دستگاه انتخاب‌شده در این بازه مشغول است.",
++      REFEREE_CONFLICT: "داور انتخاب‌شده در این بازه بازی دیگری دارد.",
++      PARTICIPANT_CONFLICT: "یکی از شرکت‌کنندگان در این بازه بازی دیگری دارد.",
++      AGGREGATE_TIE: "مجموع نتیجه رفت‌وبرگشت مساوی است و باید نتیجه تعیین‌کننده ثبت شود."
++    };
++    return NextResponse.json(
++      { message: messages[code] || "ذخیره اطلاعات بازی انجام نشد." },
++      { status: messages[code] ? 409 : 500 }
++    );
++  }
++}
+diff --git a/src/app/api/admin/matches/route.ts b/src/app/api/admin/matches/route.ts
+index 91237c4..2fcffa3 100644
+--- a/src/app/api/admin/matches/route.ts
++++ b/src/app/api/admin/matches/route.ts
+@@ -1,107 +1,129 @@
+-import { NextResponse } from "next/server";
+-import type { RowDataPacket } from "mysql2";
+-import { authorize } from "@/lib/authorization";
+-import { hasPermission } from "@/lib/auth";
+-import { queryRows } from "@/lib/db";
+-import { getRequiredResourceType } from "@/lib/resource-type";
+-
+-type MatchRow = RowDataPacket & {
+-  id: number;
+-  tournament_id: number;
+-  venue_id: number | null;
+-  game_slug: string;
+-  game_settings: unknown;
+-  tournament_title: string;
+-  round_title: string | null;
+-  resource_id: number | null;
+-  resource_title: string | null;
+-  status: string;
+-  scheduled_at: Date | null;
+-  duration_min: number | null;
+-  home_name: string | null;
+-  away_name: string | null;
+-  home_score: number | null;
+-  away_score: number | null;
+-  referee_user_id: number | null;
+-  referee_name: string | null;
+-  notes: string | null;
+-};
+-
+-type OptionRow = RowDataPacket & { id: number; title: string; venue_id: number; type: string };
+-type UserOptionRow = RowDataPacket & { id: number; name: string };
+-
+-export async function GET() {
+-  const auth = await authorize("results.submit");
+-  if (auth.response) return auth.response;
+-
+-  const canManageAll = hasPermission(auth.user, "matches.manage");
+-  const params: Array<string | number> = [];
+-  const refereeFilter = canManageAll ? "" : "AND m.referee_user_id=?";
+-  if (!canManageAll) params.push(auth.user.id);
+-
+-  const rows = await queryRows<MatchRow[]>(`
+-    SELECT m.id,m.tournament_id,t.venue_id,g.slug AS game_slug,t.game_settings,
+-           t.title AS tournament_title,tr.title AS round_title,m.resource_id,res.title AS resource_title,
+-           m.status,m.scheduled_at,m.duration_min,m.home_score,m.away_score,m.referee_user_id,referee.name AS referee_name,m.notes,
+-           COALESCE(home_team.title,home_player.name) AS home_name,
+-           COALESCE(away_team.title,away_player.name) AS away_name
+-    FROM tournament_matches m
+-    JOIN tournaments t ON t.id=m.tournament_id
+-    JOIN games g ON g.id=t.game_id
+-    LEFT JOIN tournament_rounds tr ON tr.id=m.round_id
+-    LEFT JOIN resources res ON res.id=m.resource_id
+-    LEFT JOIN users referee ON referee.id=m.referee_user_id
+-    LEFT JOIN match_participants home_mp ON home_mp.match_id=m.id AND home_mp.slot=1
+-    LEFT JOIN teams home_team ON home_team.id=home_mp.team_id
+-    LEFT JOIN players home_player ON home_player.id=home_mp.player_id
+-    LEFT JOIN match_participants away_mp ON away_mp.match_id=m.id AND away_mp.slot=2
+-    LEFT JOIN teams away_team ON away_team.id=away_mp.team_id
+-    LEFT JOIN players away_player ON away_player.id=away_mp.player_id
+-    WHERE t.deleted_at IS NULL ${refereeFilter}
+-    ORDER BY FIELD(m.status,'LIVE','READY','PENDING','POSTPONED','COMPLETED','CANCELLED'),m.scheduled_at DESC,m.id DESC
+-    LIMIT 300
+-  `, params);
+-
+-  const [resources, referees] = canManageAll ? await Promise.all([
+-    queryRows<OptionRow[]>(`SELECT id,title,venue_id,type FROM resources WHERE is_active=1 AND status='available' ORDER BY venue_id,title`),
+-    queryRows<UserOptionRow[]>(`
+-      SELECT DISTINCT u.id,u.name
+-      FROM users u
+-      JOIN user_roles ur ON ur.user_id=u.id
+-      JOIN roles r ON r.id=ur.role_id
+-      WHERE u.status='ACTIVE' AND u.deleted_at IS NULL AND r.name IN ('referee','operator','manager','super_admin')
+-      ORDER BY u.name
+-    `)
+-  ]) : [[], []];
+-
+-  return NextResponse.json({
+-    canManageAll,
+-    resources: resources.map((row) => ({
+-      id: String(row.id),
+-      title: row.title,
+-      venueId: String(row.venue_id),
+-      type: row.type
+-    })),
+-    referees: referees.map((row) => ({ id: String(row.id), title: row.name })),
+-    items: rows.map((row) => ({
+-      id: String(row.id),
+-      tournamentId: String(row.tournament_id),
+-      venueId: row.venue_id ? String(row.venue_id) : null,
+-      resourceType: getRequiredResourceType(row.game_slug, row.game_settings),
+-      tournament: row.tournament_title,
+-      round: row.round_title || "مرحله مسابقه",
+-      resourceId: row.resource_id ? String(row.resource_id) : null,
+-      resource: row.resource_title || "بدون تخصیص",
+-      status: row.status,
+-      scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
+-      durationMin: row.duration_min,
+-      home: row.home_name || "در انتظار",
+-      away: row.away_name || "در انتظار",
+-      homeScore: row.home_score,
+-      awayScore: row.away_score,
+-      refereeUserId: row.referee_user_id ? String(row.referee_user_id) : null,
+-      referee: row.referee_name || null,
+-      notes: row.notes || ""
+-    }))
+-  });
+-}
++import { NextResponse } from "next/server";
++import type { RowDataPacket } from "mysql2";
++import { authorize } from "@/lib/authorization";
++import { hasPermission } from "@/lib/auth";
++import { queryRows } from "@/lib/db";
++import { getMatchResultRules } from "@/lib/match-rules";
++
++type MatchRow = RowDataPacket & {
++  id: number;
++  tournament_title: string;
++  round_title: string | null;
++  match_number: number;
++  resource_id: number | null;
++  resource_title: string | null;
++  status: string;
++  scheduled_at: Date | null;
++  duration_min: number | null;
++  home_name: string | null;
++  away_name: string | null;
++  home_score: number | null;
++  away_score: number | null;
++  referee_user_id: number | null;
++  referee_name: string | null;
++  notes: string | null;
++  format: string;
++  game_settings: unknown;
++  participant_count: number;
++  has_open_dispute: number;
++};
++
++type OptionRow = RowDataPacket & { id: number; title: string };
++type UserOptionRow = RowDataPacket & { id: number; name: string };
++
++export async function GET(request: Request) {
++  const auth = await authorize("results.submit");
++  if (auth.response) return auth.response;
++
++  try {
++    const canManageAll = hasPermission(auth.user, "matches.manage");
++    const url = new URL(request.url);
++    const matchId = url.searchParams.get("matchId");
++    const params: Array<string | number> = [];
++    const conditions = ["t.deleted_at IS NULL"];
++
++    if (!canManageAll) {
++      conditions.push("m.referee_user_id=?");
++      params.push(auth.user.id);
++    }
++    if (matchId && /^\d+$/.test(matchId)) {
++      conditions.push("m.id=?");
++      params.push(matchId);
++    }
++
++    const rows = await queryRows<MatchRow[]>(`
++      SELECT m.id,t.title AS tournament_title,tr.title AS round_title,m.match_number,
++             m.resource_id,res.title AS resource_title,m.status,m.scheduled_at,m.duration_min,
++             m.home_score,m.away_score,m.referee_user_id,referee.name AS referee_name,m.notes,
++             t.format,t.game_settings,
++             COALESCE(home_team.title,home_player.name) AS home_name,
++             COALESCE(away_team.title,away_player.name) AS away_name,
++             (SELECT COUNT(*) FROM match_participants participant
++              WHERE participant.match_id=m.id AND (participant.player_id IS NOT NULL OR participant.team_id IS NOT NULL)) AS participant_count,
++             EXISTS(SELECT 1 FROM match_disputes dispute
++                    WHERE dispute.match_id=m.id AND dispute.status='open') AS has_open_dispute
++      FROM tournament_matches m
++      JOIN tournaments t ON t.id=m.tournament_id
++      LEFT JOIN tournament_rounds tr ON tr.id=m.round_id
++      LEFT JOIN resources res ON res.id=m.resource_id
++      LEFT JOIN users referee ON referee.id=m.referee_user_id
++      LEFT JOIN match_participants home_mp ON home_mp.match_id=m.id AND home_mp.slot=1
++      LEFT JOIN teams home_team ON home_team.id=home_mp.team_id
++      LEFT JOIN players home_player ON home_player.id=home_mp.player_id
++      LEFT JOIN match_participants away_mp ON away_mp.match_id=m.id AND away_mp.slot=2
++      LEFT JOIN teams away_team ON away_team.id=away_mp.team_id
++      LEFT JOIN players away_player ON away_player.id=away_mp.player_id
++      WHERE ${conditions.join(" AND ")}
++      ORDER BY FIELD(m.status,'LIVE','READY','POSTPONED','PENDING','COMPLETED','CANCELLED'),
++               COALESCE(m.scheduled_at,'9999-12-31'),m.match_number,m.id
++      LIMIT 300
++    `, params);
++
++    const [resources, referees] = canManageAll ? await Promise.all([
++      queryRows<OptionRow[]>(`
++        SELECT id,title FROM resources
++        WHERE is_active=1 AND status='available'
++        ORDER BY title
++      `),
++      queryRows<UserOptionRow[]>(`
++        SELECT DISTINCT u.id,u.name
++        FROM users u
++        JOIN user_roles ur ON ur.user_id=u.id
++        JOIN roles r ON r.id=ur.role_id
++        WHERE u.status='ACTIVE' AND u.deleted_at IS NULL
++          AND r.name IN ('referee','operator','manager','super_admin')
++        ORDER BY u.name
++      `)
++    ]) : [[], []];
++
++    return NextResponse.json({
++      canManageAll,
++      resources: resources.map((row) => ({ id: String(row.id), title: row.title })),
++      referees: referees.map((row) => ({ id: String(row.id), title: row.name })),
++      items: rows.map((row) => ({
++        id: String(row.id),
++        matchNumber: row.match_number,
++        tournament: row.tournament_title,
++        round: row.round_title || "مرحله مسابقه",
++        resourceId: row.resource_id ? String(row.resource_id) : null,
++        resource: row.resource_title || "بدون تخصیص",
++        status: row.status,
++        scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
++        durationMin: row.duration_min,
++        home: row.home_name || "در انتظار",
++        away: row.away_name || "در انتظار",
++        homeScore: row.home_score,
++        awayScore: row.away_score,
++        refereeUserId: row.referee_user_id ? String(row.referee_user_id) : null,
++        referee: row.referee_name || null,
++        notes: row.notes || "",
++        participantCount: Number(row.participant_count || 0),
++        hasOpenDispute: Boolean(row.has_open_dispute),
++        resultRules: getMatchResultRules(row.format, row.game_settings)
++      }))
++    });
++  } catch (error) {
++    console.error("admin matches list failed", error);
++    return NextResponse.json({ message: "دریافت بازی‌ها انجام نشد." }, { status: 500 });
++  }
++}
+diff --git a/src/app/api/admin/tournaments/[id]/completion/route.ts b/src/app/api/admin/tournaments/[id]/completion/route.ts
+new file mode 100644
+index 0000000..c3c1c26
+--- /dev/null
++++ b/src/app/api/admin/tournaments/[id]/completion/route.ts
+@@ -0,0 +1,119 @@
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import { db } from "@/lib/db";
++import {
++  finalizeTournament,
++  inspectTournamentCompletion
++} from "@/lib/tournament-completion";
++import {
++  advanceTournament,
++  recalculateRankingsForTournament
++} from "@/lib/tournament-engine";
++
++const actionSchema = z.object({
++  action: z.enum(["sync", "finalize"])
++});
++
++function parseTournamentId(value: string) {
++  return /^\d+$/.test(value) ? Number(value) : null;
++}
++
++export async function GET(
++  _request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  try {
++    const { id } = await params;
++    const tournamentId = parseTournamentId(id);
++    if (!tournamentId) {
++      return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++    }
++
++    const connection = await db.getConnection();
++    try {
++      const snapshot = await inspectTournamentCompletion(connection, tournamentId);
++      if (!snapshot) {
++        return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++      }
++      return NextResponse.json(snapshot);
++    } finally {
++      connection.release();
++    }
++  } catch {
++    return NextResponse.json(
++      { message: "دریافت وضعیت پایان مسابقه انجام نشد." },
++      { status: 500 }
++    );
++  }
++}
++
++export async function POST(
++  request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  try {
++    const input = actionSchema.parse(await request.json());
++    const { id } = await params;
++    const tournamentId = parseTournamentId(id);
++    if (!tournamentId) {
++      return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++    }
++
++    const connection = await db.getConnection();
++    let snapshot = null;
++    let advancement: unknown = null;
++    try {
++      await connection.beginTransaction();
++      if (input.action === "sync") {
++        advancement = await advanceTournament(connection, tournamentId);
++        snapshot = await inspectTournamentCompletion(connection, tournamentId);
++      } else {
++        snapshot = await finalizeTournament(connection, tournamentId);
++      }
++
++      if (snapshot?.completed) {
++        await recalculateRankingsForTournament(connection, tournamentId);
++      }
++      await connection.commit();
++    } catch (error) {
++      await connection.rollback();
++      throw error;
++    } finally {
++      connection.release();
++    }
++
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: `tournament.completion_${input.action}`,
++      entityType: "tournament",
++      entityId: String(tournamentId),
++      newData: { action: input.action, advancement },
++      request
++    });
++
++    return NextResponse.json({ ok: true, advancement, snapshot });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({ message: "عملیات نامعتبر است." }, { status: 422 });
++    }
++    const code = error instanceof Error ? error.message : "";
++    const messages: Record<string, string> = {
++      TOURNAMENT_NOT_FOUND: "مسابقه یافت نشد.",
++      TOURNAMENT_NOT_READY_TO_COMPLETE: "مسابقه هنوز شرایط پایان نهایی را ندارد.",
++      AGGREGATE_TIE: "مجموع نتیجه مرحله رفت‌وبرگشت مساوی است و برنده مشخص نشده است.",
++      DOUBLE_ELIMINATION_STATE_INVALID: "وضعیت براکت دوحذفی قابل ادامه نیست و باید بررسی شود."
++    };
++    return NextResponse.json(
++      { message: messages[code] || "عملیات پایان مسابقه انجام نشد." },
++      { status: messages[code] ? 409 : 500 }
++    );
++  }
++}
+diff --git a/src/components/admin/disputes-manager.tsx b/src/components/admin/disputes-manager.tsx
+index a610270..fdd3a14 100644
+--- a/src/components/admin/disputes-manager.tsx
++++ b/src/components/admin/disputes-manager.tsx
+@@ -1,6 +1,153 @@
+-/* eslint-disable react-hooks/set-state-in-effect */
+-"use client";
+-import { useEffect,useState } from "react";
+-import { Alert } from "@/components/ui/alert";import { Button } from "@/components/ui/button";import { Card } from "@/components/ui/card";import { Label } from "@/components/ui/label";import { SelectField } from "@/components/ui/select";import { Textarea } from "@/components/ui/textarea";
+-type Item={id:string;matchId:string;status:string;reason:string;resolution:string|null;createdAt:string;submitter:string;tournament:string;home:string;away:string};
+-export function AdminDisputesManager(){const[items,setItems]=useState<Item[]>([]);const[selected,setSelected]=useState<Item|null>(null);const[status,setStatus]=useState('resolved');const[resolution,setResolution]=useState('');const[error,setError]=useState('');const[loading,setLoading]=useState(true);async function load(){setLoading(true);const r=await fetch('/api/admin/disputes',{cache:'no-store'});const p=await r.json();setLoading(false);if(!r.ok)return setError(p.message||'دریافت اعتراض‌ها انجام نشد.');setItems(p.items||[])}useEffect(()=>{void load()},[]);async function save(){if(!selected)return;const r=await fetch(`/api/admin/disputes/${selected.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status,resolution})});const p=await r.json();if(!r.ok)return setError(p.message||'رسیدگی انجام نشد.');setSelected(null);setResolution('');await load()}return <><div className="mt-7 grid gap-4">{items.map(i=><Card key={i.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{i.tournament} · {i.home} - {i.away}</strong><p className="mt-1 text-xs text-[var(--muted)]">ثبت‌کننده: {i.submitter}</p></div><span className="rounded-full bg-[var(--surface-2)] px-3 py-1 text-xs font-bold">{i.status}</span></div><p className="mt-4 text-sm leading-7 text-[var(--muted)]">{i.reason}</p>{i.resolution&&<p className="mt-3 rounded-xl bg-emerald-500/10 p-3 text-sm">{i.resolution}</p>}{i.status==='open'&&<Button className="mt-4" size="sm" onClick={()=>{setSelected(i);setStatus('resolved');setResolution('')}}>رسیدگی</Button>}</Card>)}{!loading&&!items.length&&<Card className="p-8 text-center text-[var(--muted)]">اعتراضی وجود ندارد.</Card>}</div>{error&&<Alert tone="error" className="mt-4">{error}</Alert>}{selected&&<div className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"><Card className="w-full max-w-lg p-6"><h2 className="text-xl font-black">پاسخ به اعتراض</h2><div className="mt-5 grid gap-4"><Label>تصمیم<SelectField value={status} onValueChange={setStatus} options={[{value:'accepted',label:'پذیرفته'},{value:'rejected',label:'ردشده'},{value:'resolved',label:'رسیدگی‌شده'}]}/></Label><Label>پاسخ<Textarea className="min-h-32" value={resolution} onChange={e=>setResolution(e.target.value)}/></Label></div><div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={()=>setSelected(null)}>انصراف</Button><Button onClick={save}>ثبت پاسخ</Button></div></Card></div>}</>}
++/* eslint-disable react-hooks/set-state-in-effect */
++"use client";
++
++import { useEffect, useState } from "react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { Label } from "@/components/ui/label";
++import { SelectField } from "@/components/ui/select";
++import { Textarea } from "@/components/ui/textarea";
++
++type Item = {
++  id: string;
++  matchId: string;
++  status: string;
++  reason: string;
++  resolution: string | null;
++  createdAt: string;
++  submitter: string;
++  tournament: string;
++  home: string;
++  away: string;
++};
++
++const statusLabels: Record<string, string> = {
++  open: "باز",
++  accepted: "پذیرفته‌شده",
++  rejected: "ردشده",
++  resolved: "رسیدگی‌شده"
++};
++
++async function readPayload(response: Response) {
++  const text = await response.text();
++  if (!text) return {} as Record<string, unknown>;
++  try {
++    return JSON.parse(text) as Record<string, unknown>;
++  } catch {
++    return {} as Record<string, unknown>;
++  }
++}
++
++export function AdminDisputesManager() {
++  const [items, setItems] = useState<Item[]>([]);
++  const [selected, setSelected] = useState<Item | null>(null);
++  const [status, setStatus] = useState("resolved");
++  const [resolution, setResolution] = useState("");
++  const [error, setError] = useState("");
++  const [loading, setLoading] = useState(true);
++  const [saving, setSaving] = useState(false);
++
++  async function load() {
++    setLoading(true);
++    setError("");
++    const response = await fetch("/api/admin/disputes", { cache: "no-store" });
++    const payload = await readPayload(response);
++    setLoading(false);
++    if (!response.ok) {
++      setError(String(payload.message || "دریافت اعتراض‌ها انجام نشد."));
++      return;
++    }
++    setItems((payload.items as Item[]) || []);
++  }
++
++  useEffect(() => { void load(); }, []);
++
++  async function save() {
++    if (!selected) return;
++    setSaving(true);
++    setError("");
++    const response = await fetch(`/api/admin/disputes/${selected.id}`, {
++      method: "PATCH",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ status, resolution })
++    });
++    const payload = await readPayload(response);
++    setSaving(false);
++    if (!response.ok) {
++      setError(String(payload.message || "رسیدگی انجام نشد."));
++      return;
++    }
++    setSelected(null);
++    setResolution("");
++    await load();
++  }
++
++  return (
++    <>
++      <div className="mt-7 grid gap-4">
++        {items.map((item) => (
++          <Card key={item.id} className="p-5">
++            <div className="flex flex-wrap items-start justify-between gap-3">
++              <div>
++                <strong>{item.tournament} · {item.home} - {item.away}</strong>
++                <p className="mt-1 text-xs text-[var(--muted)]">ثبت‌کننده: {item.submitter}</p>
++              </div>
++              <span className="rounded-full bg-[var(--surface-2)] px-3 py-1 text-xs font-bold">
++                {statusLabels[item.status] || item.status}
++              </span>
++            </div>
++            <p className="mt-4 text-sm leading-7 text-[var(--muted)]">{item.reason}</p>
++            {item.resolution && <p className="mt-3 rounded-xl bg-emerald-500/10 p-3 text-sm">{item.resolution}</p>}
++            <div className="mt-4 flex flex-wrap gap-2">
++              {item.status === "open" && (
++                <Button size="sm" onClick={() => { setSelected(item); setStatus("resolved"); setResolution(""); }}>
++                  رسیدگی
++                </Button>
++              )}
++              {item.status === "accepted" && (
++                <Button href={`/admin/matches?matchId=${item.matchId}`} variant="outline" size="sm">
++                  اصلاح نتیجه بازی
++                </Button>
++              )}
++            </div>
++          </Card>
++        ))}
++        {!loading && !items.length && <Card className="p-8 text-center text-[var(--muted)]">اعتراضی وجود ندارد.</Card>}
++      </div>
++
++      {error && <Alert tone="error" className="mt-4">{error}</Alert>}
++
++      {selected && (
++        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4">
++          <Card className="w-full max-w-lg p-6">
++            <h2 className="text-xl font-black">پاسخ به اعتراض</h2>
++            <div className="mt-5 grid gap-4">
++              <Label>تصمیم
++                <SelectField
++                  value={status}
++                  onValueChange={setStatus}
++                  options={[
++                    { value: "accepted", label: "پذیرفته؛ نتیجه باید اصلاح شود" },
++                    { value: "rejected", label: "ردشده" },
++                    { value: "resolved", label: "رسیدگی‌شده بدون تغییر نتیجه" }
++                  ]}
++                />
++              </Label>
++              {status === "accepted" && (
++                <Alert tone="warning">پس از ثبت پاسخ، از دکمه «اصلاح نتیجه بازی» امتیاز صحیح را وارد کن.</Alert>
++              )}
++              <Label>پاسخ
++                <Textarea className="min-h-32" value={resolution} onChange={(event) => setResolution(event.target.value)} />
++              </Label>
++            </div>
++            <div className="mt-5 flex justify-end gap-2">
++              <Button variant="secondary" onClick={() => setSelected(null)}>انصراف</Button>
++              <Button onClick={() => void save()} loading={saving} disabled={resolution.trim().length < 3}>ثبت پاسخ</Button>
++            </div>
++          </Card>
++        </div>
++      )}
++    </>
++  );
++}
+diff --git a/src/components/admin/matches-manager.tsx b/src/components/admin/matches-manager.tsx
+index cebf0d3..3c33795 100644
+--- a/src/components/admin/matches-manager.tsx
++++ b/src/components/admin/matches-manager.tsx
+@@ -1,159 +1,413 @@
+-/* eslint-disable react-hooks/set-state-in-effect */
+-"use client";
+-
+-import { useEffect, useState } from "react";
+-import { CalendarClock, Edit3, Radio, Save, X } from "lucide-react";
+-import { Alert } from "@/components/ui/alert";
+-import { Button } from "@/components/ui/button";
+-import { Card } from "@/components/ui/card";
+-import { Input } from "@/components/ui/input";
+-import { PersianDatePicker } from "@/components/ui/persian-date-picker";
+-import { Label } from "@/components/ui/label";
+-import { SelectField } from "@/components/ui/select";
+-import { Textarea } from "@/components/ui/textarea";
+-
+-type MatchItem = {
+-  id: string;
+-  tournamentId: string;
+-  venueId: string | null;
+-  resourceType: string;
+-  tournament: string;
+-  round: string;
+-  resourceId: string | null;
+-  resource: string;
+-  status: string;
+-  scheduledAt: string | null;
+-  durationMin: number | null;
+-  home: string;
+-  away: string;
+-  homeScore: number | null;
+-  awayScore: number | null;
+-  refereeUserId: string | null;
+-  referee: string | null;
+-  notes: string;
+-};
+-
+-type Option = { id: string; title: string; venueId?: string; type?: string };
+-
+-const statusOptions = [
+-  { value: "READY", label: "آماده" },
+-  { value: "LIVE", label: "زنده" },
+-  { value: "COMPLETED", label: "پایان‌یافته" },
+-  { value: "POSTPONED", label: "به تعویق افتاده" }
+-];
+-
+-function toLocalInput(value: string | null) {
+-  if (!value) return "";
+-  const date = new Date(value);
+-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+-  return local.toISOString().slice(0, 16);
+-}
+-
+-export function MatchesManager() {
+-  const [items, setItems] = useState<MatchItem[]>([]);
+-  const [resources, setResources] = useState<Option[]>([]);
+-  const [referees, setReferees] = useState<Option[]>([]);
+-  const [canManageAll, setCanManageAll] = useState(false);
+-  const [editing, setEditing] = useState<MatchItem | null>(null);
+-  const [homeScore, setHomeScore] = useState(0);
+-  const [awayScore, setAwayScore] = useState(0);
+-  const [status, setStatus] = useState<"READY" | "LIVE" | "COMPLETED" | "POSTPONED">("LIVE");
+-  const [resourceId, setResourceId] = useState("none");
+-  const [refereeUserId, setRefereeUserId] = useState("none");
+-  const [scheduledAt, setScheduledAt] = useState("");
+-  const [durationMin, setDurationMin] = useState(30);
+-  const [notes, setNotes] = useState("");
+-  const [loading, setLoading] = useState(true);
+-  const [saving, setSaving] = useState(false);
+-  const [error, setError] = useState("");
+-  const [message, setMessage] = useState("");
+-
+-  async function load() {
+-    setLoading(true);
+-    const response = await fetch("/api/admin/matches", { cache: "no-store" });
+-    const payload = await response.json();
+-    setLoading(false);
+-    if (!response.ok) return setError(payload.message || "دریافت بازی‌ها انجام نشد.");
+-    setItems(payload.items || []);
+-    setResources(payload.resources || []);
+-    setReferees(payload.referees || []);
+-    setCanManageAll(Boolean(payload.canManageAll));
+-  }
+-
+-  useEffect(() => { void load(); }, []);
+-
+-  function openEditor(item: MatchItem) {
+-    setEditing(item);
+-    setHomeScore(item.homeScore ?? 0);
+-    setAwayScore(item.awayScore ?? 0);
+-    setStatus(statusOptions.some((option) => option.value === item.status) ? item.status as typeof status : "READY");
+-    setResourceId(item.resourceId || "none");
+-    setRefereeUserId(item.refereeUserId || "none");
+-    setScheduledAt(toLocalInput(item.scheduledAt));
+-    setDurationMin(item.durationMin || 30);
+-    setNotes(item.notes || "");
+-    setError(""); setMessage("");
+-  }
+-
+-  const availableResources = editing
+-    ? resources.filter((item) => item.venueId === editing.venueId && item.type === editing.resourceType)
+-    : [];
+-
+-  async function save() {
+-    if (!editing) return;
+-    setSaving(true); setError(""); setMessage("");
+-    const response = await fetch(`/api/admin/matches/${editing.id}`, {
+-      method: "PATCH",
+-      headers: { "Content-Type": "application/json" },
+-      body: JSON.stringify({
+-        homeScore,
+-        awayScore,
+-        status,
+-        notes: notes || null,
+-        resourceId: canManageAll && resourceId !== "none" ? Number(resourceId) : null,
+-        refereeUserId: canManageAll && refereeUserId !== "none" ? Number(refereeUserId) : null,
+-        scheduledAt: canManageAll && scheduledAt ? new Date(scheduledAt).toISOString() : null,
+-        durationMin: canManageAll ? durationMin : undefined
+-      })
+-    });
+-    const payload = await response.json();
+-    setSaving(false);
+-    if (!response.ok) return setError(payload.message || "ذخیره بازی انجام نشد.");
+-    setEditing(null);
+-    setMessage("اطلاعات بازی ذخیره شد.");
+-    await load();
+-  }
+-
+-  return (
+-    <>
+-      {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+-      {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+-      <div className="mt-7 grid gap-4 xl:grid-cols-2">
+-        {items.map((match) => <Card key={match.id} className="p-5">
+-          <div className="flex justify-between"><div><p className="text-xs text-[var(--muted)]">{match.tournament}</p><strong className="mt-1 block">{match.round}</strong></div>{match.status === "LIVE" && <span className="flex items-center gap-1 text-xs font-bold text-red-500"><Radio size={14} />زنده</span>}</div>
+-          <div className="my-6 grid grid-cols-[1fr_auto_1fr] items-center gap-4 text-center"><strong>{match.home}</strong><div className="rounded-2xl bg-[var(--surface-2)] px-5 py-3 text-xl font-black">{match.homeScore ?? 0} : {match.awayScore ?? 0}</div><strong>{match.away}</strong></div>
+-          <div className="grid gap-2 border-t border-[var(--line)] pt-4 text-xs text-[var(--muted)] sm:grid-cols-2"><span>{match.resource}</span><span>{match.referee ? `داور: ${match.referee}` : "بدون داور"}</span>{match.scheduledAt && <span className="flex items-center gap-1"><CalendarClock size={13}/>{new Intl.DateTimeFormat("fa-IR", { dateStyle: "short", timeStyle: "short" }).format(new Date(match.scheduledAt))}</span>}<Button type="button" onClick={() => openEditor(match)} variant="ghost" size="sm" className="justify-self-end"><Edit3 size={14} />ویرایش بازی</Button></div>
+-        </Card>)}
+-        {!loading && !items.length && <p className="col-span-full p-10 text-center text-[var(--muted)]">بازی قابل مدیریت وجود ندارد.</p>}
+-        {loading && <p className="col-span-full p-10 text-center text-[var(--muted)]">در حال دریافت...</p>}
+-      </div>
+-      {editing && <div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/60 p-4">
+-        <Card className="w-full max-w-2xl p-6">
+-          <div className="flex items-center justify-between"><div><h2 className="text-xl font-black">ویرایش بازی</h2><p className="mt-1 text-xs text-[var(--muted)]">{editing.home} مقابل {editing.away}</p></div><Button type="button" onClick={() => setEditing(null)} variant="secondary" size="iconSm"><X size={18}/></Button></div>
+-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+-            <Label>امتیاز {editing.home}<Input type="number" min="0" max="999" value={homeScore} onChange={(event) => setHomeScore(Number(event.target.value))}/></Label>
+-            <Label>امتیاز {editing.away}<Input type="number" min="0" max="999" value={awayScore} onChange={(event) => setAwayScore(Number(event.target.value))}/></Label>
+-            <Label>وضعیت<SelectField value={status} onValueChange={(value) => setStatus(value as typeof status)} options={statusOptions}/></Label>
+-            {canManageAll && <Label>مدت بازی (دقیقه)<Input type="number" min="5" max="240" value={durationMin} onChange={(event) => setDurationMin(Number(event.target.value))}/></Label>}
+-            {canManageAll && <Label>زمان بازی<PersianDatePicker mode="datetime" value={scheduledAt} onChange={setScheduledAt} /></Label>}
+-            {canManageAll && <Label>منبع<SelectField value={resourceId} onValueChange={setResourceId} options={[{ value: "none", label: "بدون تخصیص" }, ...availableResources.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
+-            {canManageAll && <Label>داور<SelectField value={refereeUserId} onValueChange={setRefereeUserId} options={[{ value: "none", label: "بدون داور" }, ...referees.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
+-            <Label className="sm:col-span-2">یادداشت<Textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-24"/></Label>
+-          </div>
+-          {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+-          <div className="mt-6 flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>انصراف</Button><Button type="button" onClick={save} loading={saving}><Save size={16}/>ذخیره</Button></div>
+-        </Card>
+-      </div>}
+-    </>
+-  );
+-}
++/* eslint-disable react-hooks/set-state-in-effect */
++"use client";
++
++import { useEffect, useMemo, useState } from "react";
++import {
++  AlertTriangle,
++  CalendarClock,
++  Edit3,
++  PauseCircle,
++  Play,
++  Radio,
++  RotateCcw,
++  Save,
++  Settings2,
++  Trophy,
++  X
++} from "lucide-react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { Input } from "@/components/ui/input";
++import { Label } from "@/components/ui/label";
++import { PersianDatePicker } from "@/components/ui/persian-date-picker";
++import { SelectField } from "@/components/ui/select";
++import { Textarea } from "@/components/ui/textarea";
++import { MATCH_STATUS_LABELS, type MatchCategory } from "@/lib/match-rules";
++
++type MatchItem = {
++  id: string;
++  matchNumber: number;
++  tournament: string;
++  round: string;
++  resourceId: string | null;
++  resource: string;
++  status: string;
++  scheduledAt: string | null;
++  durationMin: number | null;
++  home: string;
++  away: string;
++  homeScore: number | null;
++  awayScore: number | null;
++  refereeUserId: string | null;
++  referee: string | null;
++  notes: string;
++  participantCount: number;
++  hasOpenDispute: boolean;
++  resultRules: {
++    category: MatchCategory;
++    maxScore: number;
++    targetScore: number | null;
++    allowDraw: boolean;
++  };
++};
++
++type Option = { id: string; title: string };
++type DialogMode = "setup" | "score" | "correct" | "postpone";
++type DialogState = { mode: DialogMode; item: MatchItem } | null;
++
++const statusOptions = [
++  { value: "ALL", label: "همه وضعیت‌ها" },
++  { value: "LIVE", label: "در حال برگزاری" },
++  { value: "READY", label: "آماده شروع" },
++  { value: "POSTPONED", label: "به تعویق افتاده" },
++  { value: "PENDING", label: "در انتظار برنامه" },
++  { value: "COMPLETED", label: "پایان‌یافته" }
++];
++
++function toLocalInput(value: string | null) {
++  if (!value) return "";
++  const date = new Date(value);
++  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
++  return local.toISOString().slice(0, 16);
++}
++
++async function readPayload(response: Response) {
++  const text = await response.text();
++  if (!text) return {} as Record<string, unknown>;
++  try {
++    return JSON.parse(text) as Record<string, unknown>;
++  } catch {
++    return {} as Record<string, unknown>;
++  }
++}
++
++function scoreText(value: number | null) {
++  return value === null ? "–" : value.toLocaleString("fa-IR");
++}
++
++export function MatchesManager() {
++  const [items, setItems] = useState<MatchItem[]>([]);
++  const [resources, setResources] = useState<Option[]>([]);
++  const [referees, setReferees] = useState<Option[]>([]);
++  const [canManageAll, setCanManageAll] = useState(false);
++  const [dialog, setDialog] = useState<DialogState>(null);
++  const [statusFilter, setStatusFilter] = useState("ALL");
++  const [homeScore, setHomeScore] = useState(0);
++  const [awayScore, setAwayScore] = useState(0);
++  const [resourceId, setResourceId] = useState("none");
++  const [refereeUserId, setRefereeUserId] = useState("none");
++  const [scheduledAt, setScheduledAt] = useState("");
++  const [durationMin, setDurationMin] = useState(30);
++  const [notes, setNotes] = useState("");
++  const [loading, setLoading] = useState(true);
++  const [saving, setSaving] = useState(false);
++  const [busyId, setBusyId] = useState<string | null>(null);
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++  const [initialMatchId, setInitialMatchId] = useState<string | null>(null);
++
++  async function load(matchId = initialMatchId) {
++    setLoading(true);
++    setError("");
++    const suffix = matchId ? `?matchId=${encodeURIComponent(matchId)}` : "";
++    const response = await fetch(`/api/admin/matches${suffix}`, { cache: "no-store" });
++    const payload = await readPayload(response);
++    setLoading(false);
++    if (!response.ok) {
++      setError(String(payload.message || "دریافت بازی‌ها انجام نشد."));
++      return;
++    }
++    setItems((payload.items as MatchItem[]) || []);
++    setResources((payload.resources as Option[]) || []);
++    setReferees((payload.referees as Option[]) || []);
++    setCanManageAll(Boolean(payload.canManageAll));
++  }
++
++  useEffect(() => {
++    const matchId = new URLSearchParams(window.location.search).get("matchId");
++    setInitialMatchId(matchId);
++    void load(matchId);
++  }, []);
++
++  const visibleItems = useMemo(
++    () => statusFilter === "ALL" ? items : items.filter((item) => item.status === statusFilter),
++    [items, statusFilter]
++  );
++
++  function openDialog(item: MatchItem, mode: DialogMode) {
++    setDialog({ item, mode });
++    setHomeScore(item.homeScore ?? 0);
++    setAwayScore(item.awayScore ?? 0);
++    setResourceId(item.resourceId || "none");
++    setRefereeUserId(item.refereeUserId || "none");
++    setScheduledAt(toLocalInput(item.scheduledAt));
++    setDurationMin(item.durationMin || 30);
++    setNotes(mode === "postpone" || mode === "correct" ? "" : item.notes || "");
++    setError("");
++    setMessage("");
++  }
++
++  async function requestAction(item: MatchItem, body: Record<string, unknown>, successMessage: string) {
++    setBusyId(item.id);
++    setSaving(true);
++    setError("");
++    setMessage("");
++    const response = await fetch(`/api/admin/matches/${item.id}`, {
++      method: "PATCH",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify(body)
++    });
++    const payload = await readPayload(response);
++    setBusyId(null);
++    setSaving(false);
++    if (!response.ok) {
++      setError(String(payload.message || "ذخیره اطلاعات بازی انجام نشد."));
++      return false;
++    }
++    setDialog(null);
++    setMessage(successMessage);
++    await load(initialMatchId);
++    return true;
++  }
++
++  async function saveSetup() {
++    if (!dialog) return;
++    await requestAction(dialog.item, {
++      action: "setup",
++      resourceId: resourceId !== "none" ? Number(resourceId) : null,
++      refereeUserId: refereeUserId !== "none" ? Number(refereeUserId) : null,
++      scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : null,
++      durationMin,
++      notes: notes || null
++    }, "برنامه بازی ذخیره شد.");
++  }
++
++  async function saveScore(finalResult: boolean) {
++    if (!dialog) return;
++    const action = dialog.mode === "correct" ? "correct" : finalResult ? "complete" : "score";
++    await requestAction(dialog.item, {
++      action,
++      homeScore,
++      awayScore,
++      ...(action === "correct" ? { reason: notes } : { notes: notes || null })
++    }, action === "complete"
++      ? "نتیجه نهایی ثبت شد."
++      : action === "correct"
++        ? "نتیجه بازی اصلاح شد."
++        : "امتیاز زنده ذخیره شد.");
++  }
++
++  async function postpone() {
++    if (!dialog) return;
++    await requestAction(dialog.item, { action: "postpone", reason: notes }, "بازی به تعویق افتاد.");
++  }
++
++  return (
++    <>
++      <div className="mt-6 flex flex-wrap items-end justify-between gap-3">
++        <div className="w-full max-w-xs">
++          <Label>فیلتر وضعیت
++            <SelectField value={statusFilter} onValueChange={setStatusFilter} options={statusOptions} />
++          </Label>
++        </div>
++        {initialMatchId && (
++          <Button href="/admin/matches" variant="secondary" size="sm">نمایش همه بازی‌ها</Button>
++        )}
++      </div>
++
++      {error && <Alert tone="error" className="mt-4">{error}</Alert>}
++      {message && <Alert tone="success" className="mt-4">{message}</Alert>}
++
++      <div className="mt-7 grid gap-4 xl:grid-cols-2">
++        {visibleItems.map((match) => (
++          <Card key={match.id} className="p-5">
++            <div className="flex flex-wrap items-start justify-between gap-3">
++              <div>
++                <p className="text-xs text-[var(--muted)]">{match.tournament} · بازی {match.matchNumber.toLocaleString("fa-IR")}</p>
++                <strong className="mt-1 block">{match.round}</strong>
++              </div>
++              <span className={`rounded-full px-3 py-1 text-xs font-black ${match.status === "LIVE" ? "bg-red-500/10 text-red-500" : "bg-[var(--surface-2)] text-[var(--muted)]"}`}>
++                {match.status === "LIVE" && <Radio className="ml-1 inline" size={13} />}
++                {MATCH_STATUS_LABELS[match.status] || match.status}
++              </span>
++            </div>
++
++            <div className="my-6 grid grid-cols-[1fr_auto_1fr] items-center gap-4 text-center">
++              <strong>{match.home}</strong>
++              <div className="rounded-2xl bg-[var(--surface-2)] px-5 py-3 text-xl font-black">
++                {scoreText(match.homeScore)} : {scoreText(match.awayScore)}
++              </div>
++              <strong>{match.away}</strong>
++            </div>
++
++            {match.participantCount < 2 && (
++              <Alert tone="warning" className="mb-4">طرفین این بازی هنوز کامل نشده‌اند.</Alert>
++            )}
++            {match.hasOpenDispute && (
++              <Alert tone="warning" className="mb-4">
++                این بازی اعتراض باز دارد و تا تعیین تکلیف آن، نتیجه نهایی قابل ثبت یا اصلاح نیست.
++              </Alert>
++            )}
++
++            <div className="grid gap-2 border-t border-[var(--line)] pt-4 text-xs text-[var(--muted)] sm:grid-cols-2">
++              <span>{match.resource}</span>
++              <span>{match.referee ? `داور: ${match.referee}` : "بدون داور"}</span>
++              {match.scheduledAt && (
++                <span className="flex items-center gap-1">
++                  <CalendarClock size={13} />
++                  {new Intl.DateTimeFormat("fa-IR", { dateStyle: "short", timeStyle: "short" }).format(new Date(match.scheduledAt))}
++                </span>
++              )}
++            </div>
++
++            <div className="mt-5 flex flex-wrap gap-2">
++              {canManageAll && ["PENDING", "READY", "POSTPONED"].includes(match.status) && (
++                <Button type="button" variant="secondary" size="sm" onClick={() => openDialog(match, "setup")}>
++                  <Settings2 size={14} /> تنظیم برنامه
++                </Button>
++              )}
++              {match.status === "READY" && (
++                <Button
++                  type="button"
++                  size="sm"
++                  loading={busyId === match.id}
++                  disabled={match.participantCount < 2}
++                  onClick={() => void requestAction(match, { action: "start" }, "بازی شروع شد.")}
++                >
++                  <Play size={14} /> شروع بازی
++                </Button>
++              )}
++              {match.status === "LIVE" && (
++                <Button type="button" size="sm" onClick={() => openDialog(match, "score")}>
++                  <Edit3 size={14} /> ثبت امتیاز
++                </Button>
++              )}
++              {["READY", "LIVE"].includes(match.status) && (
++                <Button type="button" variant="dangerSoft" size="sm" onClick={() => openDialog(match, "postpone")}>
++                  <PauseCircle size={14} /> تعویق
++                </Button>
++              )}
++              {match.status === "POSTPONED" && (
++                <Button
++                  type="button"
++                  variant="soft"
++                  size="sm"
++                  loading={busyId === match.id}
++                  onClick={() => void requestAction(match, { action: "ready" }, "بازی به حالت آماده بازگشت.")}
++                >
++                  <RotateCcw size={14} /> بازگشت به آماده
++                </Button>
++              )}
++              {match.status === "COMPLETED" && canManageAll && match.participantCount === 2 && (
++                <Button type="button" variant="outline" size="sm" onClick={() => openDialog(match, "correct")}>
++                  <Trophy size={14} /> اصلاح نتیجه
++                </Button>
++              )}
++              {match.hasOpenDispute && (
++                <Button href="/admin/disputes" variant="secondary" size="sm">
++                  <AlertTriangle size={14} /> رسیدگی به اعتراض
++                </Button>
++              )}
++            </div>
++          </Card>
++        ))}
++        {!loading && !visibleItems.length && (
++          <p className="col-span-full p-10 text-center text-[var(--muted)]">بازی قابل مدیریتی در این وضعیت وجود ندارد.</p>
++        )}
++        {loading && <p className="col-span-full p-10 text-center text-[var(--muted)]">در حال دریافت...</p>}
++      </div>
++
++      {dialog && (
++        <div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/60 p-4">
++          <Card className="w-full max-w-2xl p-6">
++            <div className="flex items-center justify-between gap-3">
++              <div>
++                <h2 className="text-xl font-black">
++                  {dialog.mode === "setup" && "تنظیم برنامه بازی"}
++                  {dialog.mode === "score" && "ثبت امتیاز بازی"}
++                  {dialog.mode === "correct" && "اصلاح نتیجه نهایی"}
++                  {dialog.mode === "postpone" && "تعویق بازی"}
++                </h2>
++                <p className="mt-1 text-xs text-[var(--muted)]">{dialog.item.home} مقابل {dialog.item.away}</p>
++              </div>
++              <Button type="button" onClick={() => setDialog(null)} variant="secondary" size="iconSm"><X size={18} /></Button>
++            </div>
++
++            {dialog.mode === "setup" && (
++              <div className="mt-6 grid gap-4 sm:grid-cols-2">
++                <Label>مدت بازی (دقیقه)
++                  <Input type="number" min="5" max="240" value={durationMin} onChange={(event) => setDurationMin(Number(event.target.value))} />
++                </Label>
++                <Label>زمان بازی
++                  <PersianDatePicker mode="datetime" value={scheduledAt} onChange={setScheduledAt} />
++                </Label>
++                <Label>میز یا دستگاه
++                  <SelectField value={resourceId} onValueChange={setResourceId} options={[{ value: "none", label: "بدون تخصیص" }, ...resources.map((item) => ({ value: item.id, label: item.title }))]} />
++                </Label>
++                <Label>داور
++                  <SelectField value={refereeUserId} onValueChange={setRefereeUserId} options={[{ value: "none", label: "بدون داور" }, ...referees.map((item) => ({ value: item.id, label: item.title }))]} />
++                </Label>
++                <Label className="sm:col-span-2">یادداشت
++                  <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-24" />
++                </Label>
++              </div>
++            )}
++
++            {(dialog.mode === "score" || dialog.mode === "correct") && (
++              <div className="mt-6 grid gap-4 sm:grid-cols-2">
++                <Label>امتیاز {dialog.item.home}
++                  <Input type="number" min="0" max={dialog.item.resultRules.maxScore} value={homeScore} onChange={(event) => setHomeScore(Number(event.target.value))} />
++                </Label>
++                <Label>امتیاز {dialog.item.away}
++                  <Input type="number" min="0" max={dialog.item.resultRules.maxScore} value={awayScore} onChange={(event) => setAwayScore(Number(event.target.value))} />
++                </Label>
++                <div className="sm:col-span-2 rounded-2xl bg-[var(--surface-2)] p-3 text-xs leading-6 text-[var(--muted)]">
++                  حداکثر امتیاز مجاز: {dialog.item.resultRules.maxScore.toLocaleString("fa-IR")}
++                  {dialog.item.resultRules.targetScore && ` · امتیاز هدف: ${dialog.item.resultRules.targetScore.toLocaleString("fa-IR")}`}
++                  {` · نتیجه مساوی ${dialog.item.resultRules.allowDraw ? "مجاز است" : "مجاز نیست"}`}
++                </div>
++                <Label className="sm:col-span-2">
++                  {dialog.mode === "correct" ? "دلیل اصلاح نتیجه" : "یادداشت"}
++                  <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-24" />
++                </Label>
++              </div>
++            )}
++
++            {dialog.mode === "postpone" && (
++              <div className="mt-6">
++                <Label>دلیل تعویق
++                  <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-32" placeholder="دلیل تعویق بازی را بنویسید." />
++                </Label>
++              </div>
++            )}
++
++            {error && <Alert tone="error" className="mt-4">{error}</Alert>}
++            {dialog.item.hasOpenDispute && dialog.mode === "score" && (
++              <Alert tone="warning" className="mt-4">تا زمان تعیین تکلیف اعتراض، فقط امتیاز زنده قابل ذخیره است و پایان بازی مسدود خواهد بود.</Alert>
++            )}
++
++            <div className="mt-6 flex flex-wrap justify-end gap-2">
++              <Button type="button" variant="secondary" onClick={() => setDialog(null)}>انصراف</Button>
++              {dialog.mode === "setup" && (
++                <Button type="button" onClick={() => void saveSetup()} loading={saving}><Save size={16} />ذخیره برنامه</Button>
++              )}
++              {dialog.mode === "score" && (
++                <>
++                  <Button type="button" variant="secondary" onClick={() => void saveScore(false)} loading={saving}>ذخیره امتیاز زنده</Button>
++                  <Button type="button" onClick={() => void saveScore(true)} loading={saving} disabled={dialog.item.hasOpenDispute}><Trophy size={16} />پایان بازی</Button>
++                </>
++              )}
++              {dialog.mode === "correct" && (
++                <Button type="button" onClick={() => void saveScore(true)} loading={saving} disabled={!notes.trim()}><Save size={16} />ثبت اصلاح نتیجه</Button>
++              )}
++              {dialog.mode === "postpone" && (
++                <Button type="button" variant="danger" onClick={() => void postpone()} loading={saving} disabled={notes.trim().length < 3}><PauseCircle size={16} />ثبت تعویق</Button>
++              )}
++            </div>
++          </Card>
++        </div>
++      )}
++    </>
++  );
++}
+diff --git a/src/components/admin/tournament-completion-manager.tsx b/src/components/admin/tournament-completion-manager.tsx
+new file mode 100644
+index 0000000..6ccbffc
+--- /dev/null
++++ b/src/components/admin/tournament-completion-manager.tsx
+@@ -0,0 +1,269 @@
++"use client";
++
++import { useCallback, useEffect, useState } from "react";
++import {
++  AlertTriangle,
++  CheckCircle2,
++  Crown,
++  Medal,
++  RefreshCw,
++  Trophy
++} from "lucide-react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { getTournamentStatusLabel } from "@/lib/tournament-definition";
++
++type Participant = {
++  key: string;
++  name: string;
++  seed: number | null;
++};
++
++type Standing = {
++  rank: number;
++  participant: Participant;
++  played: number;
++  wins: number;
++  draws: number;
++  losses: number;
++  scored: number;
++  conceded: number;
++  points: number;
++};
++
++type Snapshot = {
++  tournamentId: number;
++  title: string;
++  status: string;
++  format: string;
++  totalMatches: number;
++  completedMatches: number;
++  remainingMatches: number;
++  openDisputes: number;
++  progressPercent: number;
++  champion: Participant | null;
++  runnerUp: Participant | null;
++  thirdPlace: Participant | null;
++  standings: Standing[];
++  blockers: string[];
++  warnings: string[];
++  readyToFinalize: boolean;
++  completed: boolean;
++};
++
++async function readPayload(response: Response) {
++  const text = await response.text();
++  if (!text) return {} as Record<string, unknown>;
++  try {
++    return JSON.parse(text) as Record<string, unknown>;
++  } catch {
++    return {} as Record<string, unknown>;
++  }
++}
++
++function ResultCard({
++  title,
++  participant,
++  icon
++}: {
++  title: string;
++  participant: Participant | null;
++  icon: React.ReactNode;
++}) {
++  return (
++    <Card className="p-5 text-center">
++      <div className="mx-auto grid size-11 place-items-center rounded-2xl bg-amber-500/10 text-amber-500">
++        {icon}
++      </div>
++      <p className="mt-3 text-xs text-[var(--muted)]">{title}</p>
++      <strong className="mt-1 block text-lg">{participant?.name || "هنوز مشخص نشده"}</strong>
++      {participant?.seed && (
++        <span className="mt-2 inline-block rounded-full bg-[var(--surface-2)] px-3 py-1 text-xs text-[var(--muted)]">
++          Seed {participant.seed.toLocaleString("fa-IR")}
++        </span>
++      )}
++    </Card>
++  );
++}
++
++export function TournamentCompletionManager({ tournamentId }: { tournamentId: string }) {
++  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [busy, setBusy] = useState<"sync" | "finalize" | null>(null);
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++
++  const load = useCallback(async () => {
++    setLoading(true);
++    setError("");
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/completion`, {
++      cache: "no-store"
++    });
++    const payload = await readPayload(response);
++    setLoading(false);
++    if (!response.ok) {
++      setError(String(payload.message || "دریافت وضعیت مسابقه انجام نشد."));
++      return;
++    }
++    setSnapshot(payload as unknown as Snapshot);
++  }, [tournamentId]);
++
++  useEffect(() => {
++    void load();
++  }, [load]);
++
++  async function run(action: "sync" | "finalize") {
++    setBusy(action);
++    setError("");
++    setMessage("");
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/completion`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ action })
++    });
++    const payload = await readPayload(response);
++    setBusy(null);
++    if (!response.ok) {
++      setError(String(payload.message || "عملیات انجام نشد."));
++      return;
++    }
++    setMessage(action === "sync"
++      ? "وضعیت مرحله بعد و پایان مسابقه دوباره بررسی شد."
++      : "مسابقه با موفقیت پایان یافت و قهرمان ثبت شد.");
++    await load();
++  }
++
++  if (loading && !snapshot) {
++    return <Card className="mt-7 p-10 text-center text-[var(--muted)]">در حال بررسی وضعیت مسابقه...</Card>;
++  }
++
++  return (
++    <div className="mt-7 grid gap-6">
++      {error && <Alert tone="error">{error}</Alert>}
++      {message && <Alert tone="success">{message}</Alert>}
++
++      {snapshot && (
++        <>
++          <Card className="p-6">
++            <div className="flex flex-wrap items-start justify-between gap-4">
++              <div>
++                <p className="text-xs text-[var(--muted)]">{snapshot.format}</p>
++                <h2 className="mt-1 text-2xl font-black">{snapshot.title}</h2>
++                <p className="mt-2 text-sm text-[var(--muted)]">
++                  وضعیت فعلی: {getTournamentStatusLabel(snapshot.status)}
++                </p>
++              </div>
++              <div className="flex flex-wrap gap-2">
++                {!snapshot.completed && (
++                  <Button
++                    type="button"
++                    variant="secondary"
++                    loading={busy === "sync"}
++                    onClick={() => void run("sync")}
++                  >
++                    <RefreshCw size={16} /> بررسی و ادامه خودکار
++                  </Button>
++                )}
++                {snapshot.readyToFinalize && (
++                  <Button
++                    type="button"
++                    loading={busy === "finalize"}
++                    onClick={() => void run("finalize")}
++                  >
++                    <CheckCircle2 size={16} /> پایان نهایی مسابقه
++                  </Button>
++                )}
++              </div>
++            </div>
++
++            <div className="mt-6 h-3 overflow-hidden rounded-full bg-[var(--surface-2)]">
++              <div
++                className="h-full rounded-full bg-[var(--brand)] transition-[width]"
++                style={{ width: `${snapshot.progressPercent}%` }}
++              />
++            </div>
++            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-[var(--muted)]">
++              <span>
++                {snapshot.completedMatches.toLocaleString("fa-IR")} از {snapshot.totalMatches.toLocaleString("fa-IR")} بازی پایان یافته
++              </span>
++              <span>{snapshot.progressPercent.toLocaleString("fa-IR")}%</span>
++            </div>
++          </Card>
++
++          {snapshot.completed && snapshot.champion && (
++            <Alert tone="success">
++              <span className="inline-flex items-center gap-2 font-black">
++                <Crown size={18} /> قهرمان نهایی: {snapshot.champion.name}
++              </span>
++            </Alert>
++          )}
++
++          {!!snapshot.blockers.length && (
++            <Alert tone="warning">
++              <div className="flex items-start gap-3">
++                <AlertTriangle className="mt-0.5 shrink-0" size={18} />
++                <div>
++                  <strong>مواردی که مانع پایان مسابقه هستند:</strong>
++                  <ul className="mt-2 grid gap-1 text-sm">
++                    {snapshot.blockers.map((item) => <li key={item}>• {item}</li>)}
++                  </ul>
++                </div>
++              </div>
++            </Alert>
++          )}
++
++          {!!snapshot.warnings.length && (
++            <Alert tone="info">
++              {snapshot.warnings.map((item) => <p key={item}>{item}</p>)}
++            </Alert>
++          )}
++
++          <div className="grid gap-4 md:grid-cols-3">
++            <ResultCard title="قهرمان" participant={snapshot.champion} icon={<Trophy size={22} />} />
++            <ResultCard title="نایب‌قهرمان" participant={snapshot.runnerUp} icon={<Medal size={22} />} />
++            <ResultCard title="مقام سوم" participant={snapshot.thirdPlace} icon={<Medal size={22} />} />
++          </div>
++
++          {!!snapshot.standings.length && (
++            <Card className="overflow-hidden">
++              <div className="border-b border-[var(--line)] p-5">
++                <h3 className="font-black">جدول نهایی</h3>
++              </div>
++              <div className="overflow-x-auto">
++                <table className="w-full min-w-[720px] text-right text-sm">
++                  <thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]">
++                    <tr>
++                      <th className="p-4">رتبه</th>
++                      <th className="p-4">شرکت‌کننده</th>
++                      <th className="p-4">بازی</th>
++                      <th className="p-4">برد</th>
++                      <th className="p-4">مساوی</th>
++                      <th className="p-4">باخت</th>
++                      <th className="p-4">تفاضل</th>
++                      <th className="p-4">امتیاز</th>
++                    </tr>
++                  </thead>
++                  <tbody>
++                    {snapshot.standings.map((item) => (
++                      <tr key={item.participant.key} className="border-t border-[var(--line)]">
++                        <td className="p-4 font-black">{item.rank.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{item.participant.name}</td>
++                        <td className="p-4">{item.played.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{item.wins.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{item.draws.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{item.losses.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{(item.scored - item.conceded).toLocaleString("fa-IR")}</td>
++                        <td className="p-4 font-black">{item.points.toLocaleString("fa-IR")}</td>
++                      </tr>
++                    ))}
++                  </tbody>
++                </table>
++              </div>
++            </Card>
++          )}
++        </>
++      )}
++    </div>
++  );
++}
+diff --git a/src/components/admin/tournaments-manager.tsx b/src/components/admin/tournaments-manager.tsx
+index 1127076..d3fa9ec 100644
+--- a/src/components/admin/tournaments-manager.tsx
++++ b/src/components/admin/tournaments-manager.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ 
+ import { useState } from "react";
+-import { BarChart3, CalendarClock, Edit3, ExternalLink, ListChecks, Shuffle, Trash2 } from "lucide-react";
++import { BarChart3, CalendarClock, Edit3, ExternalLink, ListChecks, Shuffle, Trash2, Trophy } from "lucide-react";
+ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+@@ -43,6 +43,6 @@ export function TournamentsManager({ initialItems, permissions }: { initialItems
+   return <>
+     {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+     {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+-    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/participants`} variant="secondary" size="sm" aria-label="نهایی‌سازی شرکت‌کنندگان"><ListChecks size={15} />شرکت‌کنندگان</Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button href={`/admin/tournaments/${item.id}/schedule`} variant="secondary" size="sm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} />زمان‌بندی</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runRanking(item)} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
++    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/participants`} variant="secondary" size="sm" aria-label="نهایی‌سازی شرکت‌کنندگان"><ListChecks size={15} />شرکت‌کنندگان</Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button href={`/admin/tournaments/${item.id}/schedule`} variant="secondary" size="sm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} />زمان‌بندی</Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/completion`} variant="secondary" size="sm" aria-label="پایان مسابقه و تعیین قهرمان"><Trophy size={15} />پایان مسابقه</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runRanking(item)} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
+   </>;
+ }
+diff --git a/src/lib/match-rules.ts b/src/lib/match-rules.ts
+new file mode 100644
+index 0000000..d155951
+--- /dev/null
++++ b/src/lib/match-rules.ts
+@@ -0,0 +1,60 @@
++export type MatchCategory = "knockout" | "league" | "group" | "swiss" | "double";
++
++function parseObject(value: unknown): Record<string, unknown> {
++  try {
++    const parsed = typeof value === "string" ? JSON.parse(value) : value;
++    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
++      ? parsed as Record<string, unknown>
++      : {};
++  } catch {
++    return {};
++  }
++}
++
++function positiveNumber(value: unknown) {
++  const number = Number(value);
++  return Number.isFinite(number) && number > 0 ? number : null;
++}
++
++export function getMatchCategory(format: string): MatchCategory {
++  const normalized = format.toLowerCase();
++  if (normalized.includes("دوحذفی") || normalized.includes("double elimination")) return "double";
++  if (normalized.includes("swiss") || normalized.includes("سوئیس")) return "swiss";
++  if (normalized.includes("گروه") || normalized.includes("group")) return "group";
++  if (normalized.includes("لیگ") || normalized.includes("league") || normalized.includes("round robin")) return "league";
++  return "knockout";
++}
++
++export function getMatchResultRules(format: string, gameSettings: unknown) {
++  const settings = parseObject(gameSettings);
++  const category = getMatchCategory(format);
++  const targetScore = positiveNumber(
++    settings.targetPoints ?? settings.targetScore ?? settings.winningScore
++  );
++  const configuredMaximum = positiveNumber(settings.maxScore);
++  const maxScore = Math.max(1, Math.min(999, Math.round(configuredMaximum ?? targetScore ?? 999)));
++  const allowDraw = settings.allowDraw === true
++    || category === "league"
++    || category === "group"
++    || category === "swiss"
++    || format.toLowerCase().includes("رفت‌وبرگشت")
++    || format.toLowerCase().includes("رفت و برگشت")
++    || format.toLowerCase().includes("two leg")
++    || format.toLowerCase().includes("home and away");
++
++  return {
++    category,
++    maxScore,
++    targetScore: targetScore ? Math.round(targetScore) : null,
++    allowDraw
++  };
++}
++
++export const MATCH_STATUS_LABELS: Record<string, string> = {
++  PENDING: "در انتظار برنامه",
++  READY: "آماده شروع",
++  LIVE: "در حال برگزاری",
++  COMPLETED: "پایان‌یافته",
++  POSTPONED: "به تعویق افتاده",
++  CANCELLED: "لغوشده"
++};
+diff --git a/src/lib/tournament-completion.ts b/src/lib/tournament-completion.ts
+new file mode 100644
+index 0000000..76e269f
+--- /dev/null
++++ b/src/lib/tournament-completion.ts
+@@ -0,0 +1,512 @@
++import type { RowDataPacket } from "mysql2";
++import type { PoolConnection } from "mysql2/promise";
++import { db } from "@/lib/db";
++
++export type CompletionParticipant = {
++  key: string;
++  playerId: number | null;
++  teamId: number | null;
++  name: string;
++  seed: number | null;
++};
++
++export type CompletionStanding = {
++  rank: number;
++  participant: CompletionParticipant;
++  played: number;
++  wins: number;
++  draws: number;
++  losses: number;
++  scored: number;
++  conceded: number;
++  points: number;
++};
++
++export type TournamentCompletionSnapshot = {
++  tournamentId: number;
++  title: string;
++  status: string;
++  format: string;
++  category: "knockout" | "league" | "group" | "swiss" | "double";
++  totalMatches: number;
++  completedMatches: number;
++  remainingMatches: number;
++  openDisputes: number;
++  unresolvedCancelledMatches: number;
++  progressPercent: number;
++  champion: CompletionParticipant | null;
++  runnerUp: CompletionParticipant | null;
++  thirdPlace: CompletionParticipant | null;
++  standings: CompletionStanding[];
++  blockers: string[];
++  warnings: string[];
++  readyToFinalize: boolean;
++  completed: boolean;
++};
++
++type TournamentRow = RowDataPacket & {
++  id: number;
++  title: string;
++  status: string;
++  format: string;
++  scoring_settings: unknown;
++};
++
++type MatchSummaryRow = RowDataPacket & {
++  total_matches: number;
++  completed_matches: number;
++  remaining_matches: number;
++  unresolved_cancelled: number;
++};
++
++type MatchParticipantRow = RowDataPacket & {
++  match_id: number;
++  pair_key: string | null;
++  status: string;
++  home_score: number | null;
++  away_score: number | null;
++  winner_slot: number | null;
++  slot: number;
++  player_id: number | null;
++  team_id: number | null;
++  seed: number | null;
++  participant_name: string | null;
++};
++
++type StandingMatchRow = RowDataPacket & {
++  match_id: number;
++  home_score: number;
++  away_score: number;
++  home_player_id: number | null;
++  home_team_id: number | null;
++  home_seed: number | null;
++  home_name: string | null;
++  away_player_id: number | null;
++  away_team_id: number | null;
++  away_seed: number | null;
++  away_name: string | null;
++};
++
++function parseObject(value: unknown): Record<string, unknown> {
++  try {
++    const parsed = typeof value === "string" ? JSON.parse(value) : value;
++    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
++      ? parsed as Record<string, unknown>
++      : {};
++  } catch {
++    return {};
++  }
++}
++
++function safeNumber(value: unknown, fallback: number) {
++  const numeric = Number(value);
++  return Number.isFinite(numeric) ? numeric : fallback;
++}
++
++function categoryOf(format: string): TournamentCompletionSnapshot["category"] {
++  const normalized = format.toLowerCase();
++  if (normalized.includes("گروه") || normalized.includes("group")) return "group";
++  if (normalized.includes("سوئیس") || normalized.includes("swiss")) return "swiss";
++  if (normalized.includes("دوحذفی") || normalized.includes("double elimination")) return "double";
++  if (normalized.includes("لیگ") || normalized.includes("round robin")) return "league";
++  return "knockout";
++}
++
++function participantKey(playerId: number | null, teamId: number | null) {
++  return playerId ? `p:${playerId}` : `t:${teamId}`;
++}
++
++function participantFromRow(row: {
++  player_id: number | null;
++  team_id: number | null;
++  seed: number | null;
++  participant_name: string | null;
++}): CompletionParticipant {
++  const playerId = row.player_id ? Number(row.player_id) : null;
++  const teamId = row.team_id ? Number(row.team_id) : null;
++  return {
++    key: participantKey(playerId, teamId),
++    playerId,
++    teamId,
++    name: row.participant_name || "شرکت‌کننده نامشخص",
++    seed: row.seed === null ? null : Number(row.seed)
++  };
++}
++
++function participantFromStanding(
++  playerId: number | null,
++  teamId: number | null,
++  seed: number | null,
++  name: string | null
++): CompletionParticipant | null {
++  if (!playerId && !teamId) return null;
++  return {
++    key: participantKey(playerId, teamId),
++    playerId: playerId ? Number(playerId) : null,
++    teamId: teamId ? Number(teamId) : null,
++    seed: seed === null ? null : Number(seed),
++    name: name || "شرکت‌کننده نامشخص"
++  };
++}
++
++async function loadRoundResult(
++  connection: PoolConnection,
++  tournamentId: number,
++  stages: string[]
++) {
++  const placeholders = stages.map(() => "?").join(",");
++  const [roundRows] = await connection.query<Array<RowDataPacket & { id: number }>>(`
++    SELECT round_row.id
++    FROM tournament_rounds round_row
++    WHERE round_row.tournament_id=? AND round_row.stage IN (${placeholders})
++    ORDER BY round_row.round_number DESC,
++      FIELD(round_row.stage,'double_reset','double_final','knockout','third_place') ASC,
++      round_row.id DESC
++    LIMIT 1
++  `, [tournamentId, ...stages]);
++  const roundId = Number(roundRows[0]?.id || 0);
++  if (!roundId) return { winner: null, loser: null, tied: false, pairCount: 0 };
++
++  const [rows] = await connection.query<MatchParticipantRow[]>(`
++    SELECT
++      match_row.id AS match_id,match_row.pair_key,match_row.status,
++      match_row.home_score,match_row.away_score,match_row.winner_slot,
++      participant.slot,participant.player_id,participant.team_id,participant.seed,
++      COALESCE(team.title,player.name) AS participant_name
++    FROM tournament_matches match_row
++    JOIN match_participants participant ON participant.match_id=match_row.id
++    LEFT JOIN teams team ON team.id=participant.team_id
++    LEFT JOIN players player ON player.id=participant.player_id
++    WHERE match_row.round_id=? AND match_row.status='COMPLETED'
++    ORDER BY match_row.match_number,participant.slot
++  `, [roundId]);
++
++  const pairs = new Map<string, Map<string, { participant: CompletionParticipant; score: number }>>();
++  for (const row of rows) {
++    const pairKey = row.pair_key || `match:${row.match_id}`;
++    const participants = pairs.get(pairKey) || new Map<string, { participant: CompletionParticipant; score: number }>();
++    const participant = participantFromRow(row);
++    const scored = Number(row.slot) === 1 ? Number(row.home_score || 0) : Number(row.away_score || 0);
++    const current = participants.get(participant.key) || { participant, score: 0 };
++    current.score += scored;
++    participants.set(participant.key, current);
++    pairs.set(pairKey, participants);
++  }
++
++  if (pairs.size !== 1) {
++    return { winner: null, loser: null, tied: false, pairCount: pairs.size };
++  }
++  const entries = [...pairs.values()][0]
++    ? [...[...pairs.values()][0].values()].sort((left, right) => right.score - left.score)
++    : [];
++  if (entries.length === 1) {
++    return { winner: entries[0].participant, loser: null, tied: false, pairCount: 1 };
++  }
++  if (entries.length < 2) return { winner: null, loser: null, tied: false, pairCount: 1 };
++  if (entries[0].score === entries[1].score) {
++    return { winner: null, loser: null, tied: true, pairCount: 1 };
++  }
++  return {
++    winner: entries[0].participant,
++    loser: entries[1].participant,
++    tied: false,
++    pairCount: 1
++  };
++}
++
++async function loadStandings(
++  connection: PoolConnection,
++  tournamentId: number,
++  stage: "league" | "swiss",
++  scoringSettings: unknown
++) {
++  const [rows] = await connection.query<StandingMatchRow[]>(`
++    SELECT
++      match_row.id AS match_id,match_row.home_score,match_row.away_score,
++      home.player_id AS home_player_id,home.team_id AS home_team_id,home.seed AS home_seed,
++      COALESCE(home_team.title,home_player.name) AS home_name,
++      away.player_id AS away_player_id,away.team_id AS away_team_id,away.seed AS away_seed,
++      COALESCE(away_team.title,away_player.name) AS away_name
++    FROM tournament_matches match_row
++    JOIN tournament_rounds round_row ON round_row.id=match_row.round_id AND round_row.stage=?
++    LEFT JOIN match_participants home ON home.match_id=match_row.id AND home.slot=1
++    LEFT JOIN teams home_team ON home_team.id=home.team_id
++    LEFT JOIN players home_player ON home_player.id=home.player_id
++    LEFT JOIN match_participants away ON away.match_id=match_row.id AND away.slot=2
++    LEFT JOIN teams away_team ON away_team.id=away.team_id
++    LEFT JOIN players away_player ON away_player.id=away.player_id
++    WHERE match_row.tournament_id=?
++      AND match_row.status='COMPLETED'
++      AND match_row.home_score IS NOT NULL
++      AND match_row.away_score IS NOT NULL
++    ORDER BY match_row.match_number
++  `, [stage, tournamentId]);
++
++  const scoring = parseObject(scoringSettings);
++  const winPoints = safeNumber(scoring.win, 3);
++  const drawPoints = safeNumber(scoring.draw, 1);
++  const lossPoints = safeNumber(scoring.loss, 0);
++  const table = new Map<string, Omit<CompletionStanding, "rank">>();
++
++  function apply(participant: CompletionParticipant | null, scored: number, conceded: number) {
++    if (!participant) return;
++    const current = table.get(participant.key) || {
++      participant,
++      played: 0,
++      wins: 0,
++      draws: 0,
++      losses: 0,
++      scored: 0,
++      conceded: 0,
++      points: 0
++    };
++    current.played += 1;
++    current.scored += scored;
++    current.conceded += conceded;
++    if (scored > conceded) {
++      current.wins += 1;
++      current.points += winPoints;
++    } else if (scored === conceded) {
++      current.draws += 1;
++      current.points += drawPoints;
++    } else {
++      current.losses += 1;
++      current.points += lossPoints;
++    }
++    table.set(participant.key, current);
++  }
++
++  for (const row of rows) {
++    const home = participantFromStanding(
++      row.home_player_id,
++      row.home_team_id,
++      row.home_seed,
++      row.home_name
++    );
++    const away = participantFromStanding(
++      row.away_player_id,
++      row.away_team_id,
++      row.away_seed,
++      row.away_name
++    );
++    apply(home, Number(row.home_score), Number(row.away_score));
++    apply(away, Number(row.away_score), Number(row.home_score));
++  }
++
++  return [...table.values()]
++    .sort((left, right) => (
++      right.points - left.points
++      || (right.scored - right.conceded) - (left.scored - left.conceded)
++      || right.scored - left.scored
++      || right.wins - left.wins
++      || (left.participant.seed ?? Number.MAX_SAFE_INTEGER)
++        - (right.participant.seed ?? Number.MAX_SAFE_INTEGER)
++      || left.participant.key.localeCompare(right.participant.key)
++    ))
++    .map((item, index): CompletionStanding => ({ ...item, rank: index + 1 }));
++}
++
++async function loadDoubleResult(connection: PoolConnection, tournamentId: number) {
++  const [participants] = await connection.query<Array<RowDataPacket & {
++    player_id: number | null;
++    team_id: number | null;
++    seed: number | null;
++    participant_name: string | null;
++    losses: number;
++  }>>(`
++    SELECT
++      entry.player_id,entry.team_id,entry.seed,
++      COALESCE(team.title,player.name) AS participant_name,
++      COALESCE(losses.losses,0) AS losses
++    FROM registration_entries entry
++    JOIN registrations registration ON registration.id=entry.registration_id
++      AND registration.tournament_id=?
++      AND registration.status IN ('CONFIRMED','CHECKED_IN')
++      AND registration.deleted_at IS NULL
++    LEFT JOIN teams team ON team.id=entry.team_id
++    LEFT JOIN players player ON player.id=entry.player_id
++    LEFT JOIN (
++      SELECT loser.player_id,loser.team_id,COUNT(*) AS losses
++      FROM tournament_matches match_row
++      JOIN match_participants loser
++        ON loser.match_id=match_row.id AND loser.slot<>match_row.winner_slot
++      WHERE match_row.tournament_id=?
++        AND match_row.status='COMPLETED'
++        AND match_row.winner_slot IS NOT NULL
++      GROUP BY loser.player_id,loser.team_id
++    ) losses ON losses.player_id<=>entry.player_id AND losses.team_id<=>entry.team_id
++    ORDER BY COALESCE(entry.seed,999999),entry.id
++  `, [tournamentId, tournamentId]);
++
++  const active = participants.filter((row) => Number(row.losses) < 2);
++  const champion = active.length === 1 ? participantFromRow(active[0]) : null;
++  const final = await loadRoundResult(connection, tournamentId, ["double_reset", "double_final"]);
++  return {
++    champion,
++    runnerUp: champion ? final.loser : null,
++    tied: false,
++    pairCount: final.pairCount
++  };
++}
++
++export async function inspectTournamentCompletion(
++  connection: PoolConnection,
++  tournamentId: number
++): Promise<TournamentCompletionSnapshot | null> {
++  const [tournamentRows] = await connection.query<TournamentRow[]>(`
++    SELECT id,title,status,format,scoring_settings
++    FROM tournaments
++    WHERE id=? AND deleted_at IS NULL
++    LIMIT 1
++  `, [tournamentId]);
++  const tournament = tournamentRows[0];
++  if (!tournament) return null;
++
++  const [summaryRows] = await connection.query<MatchSummaryRow[]>(`
++    SELECT
++      COUNT(*) AS total_matches,
++      COALESCE(SUM(status='COMPLETED'),0) AS completed_matches,
++      COALESCE(SUM(status NOT IN ('COMPLETED','CANCELLED')),0) AS remaining_matches,
++      COALESCE(SUM(status='CANCELLED' AND winner_slot IS NULL),0) AS unresolved_cancelled
++    FROM tournament_matches
++    WHERE tournament_id=?
++  `, [tournamentId]);
++  const summary = summaryRows[0];
++  const totalMatches = Number(summary?.total_matches || 0);
++  const completedMatches = Number(summary?.completed_matches || 0);
++  const remainingMatches = Number(summary?.remaining_matches || 0);
++  const unresolvedCancelledMatches = Number(summary?.unresolved_cancelled || 0);
++
++  const [disputeRows] = await connection.query<Array<RowDataPacket & { count: number }>>(`
++    SELECT COUNT(*) AS count
++    FROM match_disputes dispute
++    JOIN tournament_matches match_row ON match_row.id=dispute.match_id
++    WHERE match_row.tournament_id=? AND dispute.status IN ('open','accepted')
++  `, [tournamentId]);
++  const openDisputes = Number(disputeRows[0]?.count || 0);
++  const category = categoryOf(tournament.format);
++
++  let champion: CompletionParticipant | null = null;
++  let runnerUp: CompletionParticipant | null = null;
++  let thirdPlace: CompletionParticipant | null = null;
++  let standings: CompletionStanding[] = [];
++  let tiedFinal = false;
++
++  if (category === "league" || category === "swiss") {
++    standings = await loadStandings(connection, tournamentId, category, tournament.scoring_settings);
++    champion = standings[0]?.participant || null;
++    runnerUp = standings[1]?.participant || null;
++    thirdPlace = standings[2]?.participant || null;
++  } else if (category === "double") {
++    const result = await loadDoubleResult(connection, tournamentId);
++    champion = result.champion;
++    runnerUp = result.runnerUp;
++  } else {
++    const final = await loadRoundResult(connection, tournamentId, ["knockout"]);
++    champion = final.winner;
++    runnerUp = final.loser;
++    tiedFinal = final.tied;
++    const third = await loadRoundResult(connection, tournamentId, ["third_place"]);
++    thirdPlace = third.winner;
++  }
++
++  const blockers: string[] = [];
++  const warnings: string[] = [];
++  if (tournament.status === "CANCELLED") blockers.push("مسابقه لغو شده است.");
++  if (!["DRAW_READY", "RUNNING", "COMPLETED"].includes(tournament.status)) {
++    blockers.push("وضعیت مسابقه هنوز برای پایان نهایی مناسب نیست.");
++  }
++  if (!totalMatches) blockers.push("هنوز بازی‌ای برای این مسابقه ساخته نشده است.");
++  if (remainingMatches) blockers.push(`${remainingMatches.toLocaleString("fa-IR")} بازی هنوز پایان نیافته است.`);
++  if (unresolvedCancelledMatches) blockers.push("حداقل یک بازی لغوشده بدون نتیجه تعیین‌کننده وجود دارد.");
++  if (openDisputes) blockers.push(`${openDisputes.toLocaleString("fa-IR")} اعتراض باز باید تعیین تکلیف شود.`);
++  if (tiedFinal) blockers.push("نتیجه مجموع فینال مساوی است و قهرمان مشخص نشده است.");
++  if (!champion) blockers.push("قهرمان نهایی هنوز قابل تشخیص نیست.");
++
++  if (standings.length >= 2) {
++    const first = standings[0];
++    const second = standings[1];
++    const sameCompetitiveScore = first.points === second.points
++      && first.scored - first.conceded === second.scored - second.conceded
++      && first.scored === second.scored
++      && first.wins === second.wins;
++    if (sameCompetitiveScore) {
++      warnings.push("رتبه اول با معیار Seed یا ترتیب پایدار سیستم از رتبه دوم جدا شده است.");
++    }
++  }
++
++  const completed = tournament.status === "COMPLETED";
++  const readyToFinalize = !completed && blockers.length === 0;
++  return {
++    tournamentId: Number(tournament.id),
++    title: tournament.title,
++    status: tournament.status,
++    format: tournament.format,
++    category,
++    totalMatches,
++    completedMatches,
++    remainingMatches,
++    openDisputes,
++    unresolvedCancelledMatches,
++    progressPercent: totalMatches ? Math.round((completedMatches / totalMatches) * 100) : 0,
++    champion,
++    runnerUp,
++    thirdPlace,
++    standings,
++    blockers,
++    warnings,
++    readyToFinalize,
++    completed
++  };
++}
++
++export async function getTournamentCompletionSnapshot(tournamentId: number) {
++  const connection = await db.getConnection();
++  try {
++    return await inspectTournamentCompletion(connection, tournamentId);
++  } finally {
++    connection.release();
++  }
++}
++
++export async function finalizeTournament(
++  connection: PoolConnection,
++  tournamentId: number
++) {
++  const [locked] = await connection.query<RowDataPacket[]>(`
++    SELECT id FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1 FOR UPDATE
++  `, [tournamentId]);
++  if (!locked[0]) throw new Error("TOURNAMENT_NOT_FOUND");
++
++  const snapshot = await inspectTournamentCompletion(connection, tournamentId);
++  if (!snapshot) throw new Error("TOURNAMENT_NOT_FOUND");
++  if (snapshot.completed) return snapshot;
++  if (!snapshot.readyToFinalize) throw new Error("TOURNAMENT_NOT_READY_TO_COMPLETE");
++
++  await connection.execute(`
++    UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?
++  `, [tournamentId]);
++  return { ...snapshot, status: "COMPLETED", completed: true, readyToFinalize: false };
++}
++
++export async function listCompletedTournamentChampions(limit = 30) {
++  const safeLimit = Math.max(1, Math.min(50, Math.round(limit)));
++  const connection = await db.getConnection();
++  try {
++    const [rows] = await connection.query<Array<RowDataPacket & { id: number }>>(`
++      SELECT id
++      FROM tournaments
++      WHERE status='COMPLETED' AND deleted_at IS NULL
++      ORDER BY updated_at DESC,id DESC
++      LIMIT ${safeLimit}
++    `);
++    const snapshots: TournamentCompletionSnapshot[] = [];
++    for (const row of rows) {
++      const snapshot = await inspectTournamentCompletion(connection, Number(row.id));
++      if (snapshot?.champion && snapshot.openDisputes === 0) snapshots.push(snapshot);
++    }
++    return snapshots;
++  } finally {
++    connection.release();
++  }
++}
+diff --git a/src/lib/tournament-engine.ts b/src/lib/tournament-engine.ts
+index c2e8f09..2f0c51d 100644
+--- a/src/lib/tournament-engine.ts
++++ b/src/lib/tournament-engine.ts
+@@ -963,6 +963,36 @@ export async function regenerateTournamentDraw(
+   }
+ }
+ 
++async function tournamentHasOpenDispute(connection: PoolConnection, tournamentId: number) {
++  const [rows] = await connection.query<RowDataPacket[]>(`
++    SELECT dispute.id
++    FROM match_disputes dispute
++    JOIN tournament_matches match_row ON match_row.id=dispute.match_id
++    WHERE match_row.tournament_id=? AND dispute.status IN ('open','accepted')
++    LIMIT 1
++  `, [tournamentId]);
++  return Boolean(rows[0]);
++}
++
++async function tournamentHasUnresolvedCancelledMatch(connection: PoolConnection, tournamentId: number) {
++  const [rows] = await connection.query<RowDataPacket[]>(`
++    SELECT match_row.id
++    FROM tournament_matches match_row
++    WHERE match_row.tournament_id=? AND match_row.status='CANCELLED'
++      AND match_row.winner_slot IS NULL
++      AND (SELECT COUNT(*) FROM match_participants participant WHERE participant.match_id=match_row.id)>=2
++    LIMIT 1
++  `, [tournamentId]);
++  return Boolean(rows[0]);
++}
++
++async function markTournamentCompleted(connection: PoolConnection, tournamentId: number) {
++  await connection.execute(`
++    UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?
++  `, [tournamentId]);
++  return { advanced: true, completed: true };
++}
++
+ export async function advanceTournament(connection: PoolConnection, tournamentId: number) {
+   const tournament = await loadTournament(connection, tournamentId);
+   if (!tournament || tournament.status === "COMPLETED") return { advanced: false };
+@@ -973,11 +1003,16 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+     LIMIT 1
+   `, [tournament.id]);
+   if (pending[0]) return { advanced: false };
++  if (await tournamentHasOpenDispute(connection, tournament.id)) {
++    return { advanced: false, blocked: "OPEN_DISPUTE" };
++  }
++  if (await tournamentHasUnresolvedCancelledMatch(connection, tournament.id)) {
++    return { advanced: false, blocked: "UNRESOLVED_CANCELLED_MATCH" };
++  }
+ 
+   const category = formatCategory(tournament.format);
+   if (category === "league") {
+-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+-    return { advanced: true, completed: true };
++    return markTournamentCompleted(connection, tournament.id);
+   }
+ 
+   if (category === "group") {
+@@ -1041,8 +1076,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+       await createSwissRound(connection, tournament, participants, currentRound + 1);
+       return { advanced: true, completed: false };
+     }
+-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+-    return { advanced: true, completed: true };
++    return markTournamentCompleted(connection, tournament.id);
+   }
+ 
+   if (category === "double") {
+@@ -1064,8 +1098,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+       ORDER BY state.losses,COALESCE(re.seed,999999),state.updated_at
+     `, [tournament.id]);
+     if (activeRows.length <= 1) {
+-      await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+-      return { advanced: true, completed: true };
++      return markTournamentCompleted(connection, tournament.id);
+     }
+ 
+     const participants = activeRows.map((row): Participant => ({
+@@ -1149,8 +1182,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+ 
+   const resolved = await resolveKnockoutRound(connection, lastRound.id);
+   if (resolved.winners.length <= 1) {
+-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+-    return { advanced: true, completed: true };
++    return markTournamentCompleted(connection, tournament.id);
+   }
+ 
+   const nextRoundNumber = Number(lastRound.round_number) + 1;

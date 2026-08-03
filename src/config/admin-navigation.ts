@@ -4,7 +4,7 @@ export const adminNavigation = [
   { href: "/admin/templates", label: "قالب‌های مسابقه", icon: "CopyPlus" },
   { href: "/admin/waitlist", label: "صف انتظار", icon: "ListOrdered" },
   { href: "/admin/players", label: "بازیکنان", icon: "Contact" },
-  { href: "/admin/participants", label: "شرکت‌کنندگان و حضور", icon: "Users" },
+  { href: "/admin/participants", label: "حضور و غیبت", icon: "Users" },
   { href: "/admin/matches", label: "بازی‌ها و نتایج", icon: "Swords" },
   { href: "/admin/disputes", label: "اعتراض‌ها", icon: "Scale" },
   { href: "/admin/payments", label: "پرداخت‌ها", icon: "WalletCards" },

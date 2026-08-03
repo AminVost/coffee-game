@@ -66,7 +66,7 @@ export function AdminSidebar({
                 className={cn(
                   "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-bold transition",
                   active
-                    ? "bg-[var(--brand)] text-white shadow-[0_12px_28px_color-mix(in_srgb,var(--brand)_24%,transparent)]"
+                    ? "bg-[var(--brand)] text-white"
                     : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
                 )}
               >

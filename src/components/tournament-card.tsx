@@ -13,7 +13,7 @@ function statusTone(status: Tournament["status"]) {
 
 export function TournamentCard({ tournament }: { tournament: Tournament }) {
   const percentage = Math.min(100, Math.round((tournament.registered / tournament.capacity) * 100));
-  return <Link href={`/tournaments/${tournament.slug}`} className="group overflow-hidden rounded-[1.75rem] border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)] transition hover:-translate-y-1 hover:border-[var(--brand)]/40">
+  return <Link href={`/tournaments/${tournament.slug}`} className="group overflow-hidden rounded-[1.75rem] border border-[var(--line)] bg-[var(--surface)] transition hover:-translate-y-1 hover:border-[var(--brand)]/40">
     <div className="relative h-44 overflow-hidden p-5 text-white" style={{ background: tournament.cover }}>
       <div className="absolute inset-0 bg-black/15" />
       <div className="relative flex h-full flex-col justify-between">

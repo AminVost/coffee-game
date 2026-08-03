@@ -1,0 +1,887 @@
+diff --git a/src/app/admin/participants/page.tsx b/src/app/admin/participants/page.tsx
+index 1fcd321..f18ec96 100644
+--- a/src/app/admin/participants/page.tsx
++++ b/src/app/admin/participants/page.tsx
+@@ -5,7 +5,7 @@ export default async function Participants() {
+   await requireAdminPage("checkin.manage");
+   return <div>
+     <p className="section-kicker">PARTICIPANTS</p>
+-    <h1 className="section-title mt-2">شرکت‌کنندگان و Check-in</h1>
++    <h1 className="section-title mt-2">حضور و غیبت شرکت‌کنندگان</h1>
+     <ParticipantsManager/>
+   </div>;
+ }
+diff --git a/src/app/admin/tournaments/[id]/participants/page.tsx b/src/app/admin/tournaments/[id]/participants/page.tsx
+new file mode 100644
+index 0000000..5add8ff
+--- /dev/null
++++ b/src/app/admin/tournaments/[id]/participants/page.tsx
+@@ -0,0 +1,22 @@
++import { TournamentParticipantsManager } from "@/components/admin/tournament-participants-manager";
++import { requireAdminPage } from "@/lib/page-authorization";
++
++export default async function TournamentParticipantsPage({
++  params
++}: {
++  params: Promise<{ id: string }>;
++}) {
++  await requireAdminPage("tournaments.manage");
++  const { id } = await params;
++
++  return (
++    <div>
++      <p className="section-kicker">FINAL PARTICIPANTS</p>
++      <h1 className="section-title mt-2">نهایی‌سازی شرکت‌کنندگان</h1>
++      <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--muted)]">
++        در این صفحه فقط ثبت‌نام‌های قطعی بررسی می‌شوند. بعد از نهایی‌سازی، ثبت‌نام بسته می‌شود و فهرست آماده قرعه خواهد بود.
++      </p>
++      <TournamentParticipantsManager tournamentId={id} />
++    </div>
++  );
++}
+diff --git a/src/app/api/admin/tournaments/[id]/draw/route.ts b/src/app/api/admin/tournaments/[id]/draw/route.ts
+index fd981d6..78eb069 100644
+--- a/src/app/api/admin/tournaments/[id]/draw/route.ts
++++ b/src/app/api/admin/tournaments/[id]/draw/route.ts
+@@ -34,6 +34,7 @@ const messages: Record<string, string> = {
+   DRAW_ALREADY_EXISTS: "قرعه این مسابقه قبلاً ساخته شده است.",
+   NOT_ENOUGH_PARTICIPANTS: "حداقل دو شرکت‌کننده تأییدشده لازم است.",
+   MINIMUM_PARTICIPANTS_NOT_REACHED: "تعداد شرکت‌کنندگان تأییدشده به حداقل تعیین‌شده مسابقه نرسیده است.",
++  PARTICIPANTS_NOT_FINALIZED: "فهرست شرکت‌کنندگان نهایی و بررسی نشده است. ابتدا از صفحه شرکت‌کنندگان مسابقه، نهایی‌سازی را انجام دهید.",
+   DUPLICATE_SEED: "Seed تکراری است. هر Seed باید فقط به یک شرکت‌کننده اختصاص داده شود.",
+   INVALID_SEED: "مقدار Seed نامعتبر است.",
+   INVALID_PARTICIPANT_ORDER: "ترتیب شرکت‌کنندگان نامعتبر یا ناقص است.",
+diff --git a/src/app/api/admin/tournaments/[id]/participants/route.ts b/src/app/api/admin/tournaments/[id]/participants/route.ts
+new file mode 100644
+index 0000000..be33ad4
+--- /dev/null
++++ b/src/app/api/admin/tournaments/[id]/participants/route.ts
+@@ -0,0 +1,154 @@
++import { NextResponse } from "next/server";
++import type { RowDataPacket } from "mysql2";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import { db } from "@/lib/db";
++import { inspectTournamentParticipants } from "@/lib/tournament-participants";
++
++const AUTO_RESOLVED_BLOCKERS = new Set(["ACTIVE_HOLDS", "ACTIVE_WAITLIST"]);
++
++function parseTournamentId(value: string) {
++  return /^\d+$/.test(value) ? Number(value) : null;
++}
++
++export async function GET(
++  _request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  const { id } = await params;
++  const tournamentId = parseTournamentId(id);
++  if (!tournamentId) {
++    return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++  }
++
++  const connection = await db.getConnection();
++  try {
++    const inspection = await inspectTournamentParticipants(connection, tournamentId);
++    if (!inspection) {
++      return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++    }
++    return NextResponse.json(inspection);
++  } finally {
++    connection.release();
++  }
++}
++
++export async function POST(
++  request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  const { id } = await params;
++  const tournamentId = parseTournamentId(id);
++  if (!tournamentId) {
++    return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++  }
++
++  const connection = await db.getConnection();
++  let oldStatus = "";
++  try {
++    await connection.beginTransaction();
++
++    const [lockedTournament] = await connection.query<Array<RowDataPacket & { status: string }>>(`
++      SELECT status
++      FROM tournaments
++      WHERE id=? AND deleted_at IS NULL
++      LIMIT 1
++      FOR UPDATE
++    `, [tournamentId]);
++    if (!lockedTournament[0]) {
++      await connection.rollback();
++      return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++    }
++    oldStatus = String(lockedTournament[0].status);
++
++    const before = await inspectTournamentParticipants(connection, tournamentId);
++    if (!before) {
++      await connection.rollback();
++      return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++    }
++
++    const hardBlockers = before.blockers.filter((blocker) => !AUTO_RESOLVED_BLOCKERS.has(blocker.code));
++    if (hardBlockers.length) {
++      await connection.rollback();
++      return NextResponse.json({
++        message: "فهرست شرکت‌کنندگان هنوز آماده نهایی‌سازی نیست.",
++        blockers: hardBlockers
++      }, { status: 409 });
++    }
++
++    await connection.execute(`
++      UPDATE registration_holds
++      SET status='EXPIRED',updated_at=NOW()
++      WHERE tournament_id=? AND status='ACTIVE'
++    `, [tournamentId]);
++
++    await connection.execute(`
++      UPDATE waitlist_entries
++      SET status='CANCELLED',cancelled_at=NOW(),updated_at=NOW()
++      WHERE tournament_id=? AND status IN ('WAITING','OFFERED')
++    `, [tournamentId]);
++
++    await connection.execute(`
++      UPDATE registration_entries entry
++      JOIN registrations registration ON registration.id=entry.registration_id
++      SET entry.confirmed_at=COALESCE(entry.confirmed_at,NOW())
++      WHERE registration.tournament_id=?
++        AND registration.deleted_at IS NULL
++        AND registration.status IN ('CONFIRMED','CHECKED_IN')
++    `, [tournamentId]);
++
++    await connection.execute(`
++      UPDATE tournaments
++      SET status='REGISTRATION_CLOSED',
++          registration_ends_at=CASE
++            WHEN registration_ends_at IS NULL OR registration_ends_at>NOW() THEN NOW()
++            ELSE registration_ends_at
++          END,
++          updated_at=NOW()
++      WHERE id=?
++    `, [tournamentId]);
++
++    const after = await inspectTournamentParticipants(connection, tournamentId);
++    if (!after || !after.readyForDraw) {
++      await connection.rollback();
++      return NextResponse.json({
++        message: "پس از نهایی‌سازی، فهرست هنوز آماده قرعه نیست.",
++        blockers: after?.blockers || []
++      }, { status: 409 });
++    }
++
++    await connection.commit();
++
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: "tournament.participants_finalized",
++      entityType: "tournament",
++      entityId: String(tournamentId),
++      oldData: {
++        status: oldStatus,
++        finalUnits: before.finalUnits,
++        activeHolds: before.activeHolds,
++        activeWaitlist: before.activeWaitlist
++      },
++      newData: {
++        status: "REGISTRATION_CLOSED",
++        finalUnits: after.finalUnits
++      },
++      request
++    });
++
++    return NextResponse.json({ ok: true, inspection: after });
++  } catch (error) {
++    await connection.rollback();
++    console.error("tournament.participants.finalize_failed", error);
++    return NextResponse.json({ message: "نهایی‌سازی شرکت‌کنندگان انجام نشد." }, { status: 500 });
++  } finally {
++    connection.release();
++  }
++}
+diff --git a/src/components/admin/tournament-participants-manager.tsx b/src/components/admin/tournament-participants-manager.tsx
+new file mode 100644
+index 0000000..ba09754
+--- /dev/null
++++ b/src/components/admin/tournament-participants-manager.tsx
+@@ -0,0 +1,242 @@
++/* eslint-disable react-hooks/set-state-in-effect */
++"use client";
++
++import { useEffect, useMemo, useState } from "react";
++import { CheckCircle2, Clock3, ListChecks, RefreshCcw, ShieldAlert, UsersRound } from "lucide-react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++
++const registrationStatusTitle: Record<string, string> = {
++  RESERVED: "رزروشده",
++  PENDING_PAYMENT: "در انتظار پرداخت",
++  PENDING_APPROVAL: "در انتظار تأیید",
++  NEEDS_CORRECTION: "نیازمند اصلاح",
++  CONFIRMED: "قطعی",
++  CHECKED_IN: "حاضر"
++};
++
++const paymentStatusTitle: Record<string, string> = {
++  PENDING: "در انتظار بررسی",
++  NEEDS_CORRECTION: "نیازمند اصلاح",
++  APPROVED: "تأییدشده",
++  REJECTED: "ردشده",
++  EXPIRED: "منقضی‌شده"
++};
++
++type Entry = {
++  id: number;
++  playerId: number | null;
++  teamId: number | null;
++  name: string;
++  mobile: string | null;
++  seed: number | null;
++  teamMemberCount: number;
++  teamMemberNames: string[];
++};
++
++type Registration = {
++  id: number;
++  publicId: string;
++  status: string;
++  slots: number;
++  contactMobile: string | null;
++  paymentStatus: string | null;
++  entries: Entry[];
++};
++
++type Inspection = {
++  tournament: {
++    id: number;
++    title: string;
++    status: string;
++    participantType: "INDIVIDUAL" | "TEAM";
++    teamSize: number;
++    capacity: number;
++    minimumParticipants: number;
++  };
++  finalRegistrations: Registration[];
++  pendingRegistrations: Registration[];
++  finalUnits: number;
++  pendingCount: number;
++  activeHolds: number;
++  activeWaitlist: number;
++  drawExists: boolean;
++  blockers: Array<{ code: string; message: string }>;
++  readyForDraw: boolean;
++};
++
++const autoResolvedCodes = new Set(["ACTIVE_HOLDS", "ACTIVE_WAITLIST"]);
++
++function participantName(registration: Registration) {
++  return registration.entries.map((entry) => entry.name).filter(Boolean).join("، ") || "بدون نام";
++}
++
++function participantDetails(registration: Registration) {
++  const members = registration.entries.flatMap((entry) => entry.teamMemberNames || []);
++  if (members.length) return members.join("، ");
++  const mobiles = registration.entries.map((entry) => entry.mobile).filter(Boolean);
++  return mobiles.join("، ") || registration.contactMobile || "—";
++}
++
++export function TournamentParticipantsManager({ tournamentId }: { tournamentId: string }) {
++  const [data, setData] = useState<Inspection | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [busy, setBusy] = useState(false);
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++
++  async function load() {
++    setLoading(true);
++    setError("");
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/participants`, { cache: "no-store" });
++    const payload = await response.json();
++    setLoading(false);
++    if (!response.ok) {
++      setError(payload.message || "دریافت اطلاعات شرکت‌کنندگان انجام نشد.");
++      return;
++    }
++    setData(payload);
++  }
++
++  useEffect(() => { void load(); }, [tournamentId]);
++
++  const hardBlockers = useMemo(
++    () => data?.blockers.filter((item) => !autoResolvedCodes.has(item.code)) || [],
++    [data]
++  );
++  const cleanupWarnings = useMemo(
++    () => data?.blockers.filter((item) => autoResolvedCodes.has(item.code)) || [],
++    [data]
++  );
++
++  async function finalize() {
++    if (!data) return;
++    const cleanupText = cleanupWarnings.length
++      ? " رزروهای موقت و صف انتظار فعال نیز بسته می‌شوند."
++      : "";
++    if (!window.confirm(`فهرست ${data.finalUnits.toLocaleString("fa-IR")} شرکت‌کننده نهایی شود؟${cleanupText}`)) return;
++
++    setBusy(true);
++    setError("");
++    setMessage("");
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/participants`, { method: "POST" });
++    const payload = await response.json();
++    setBusy(false);
++    if (!response.ok) {
++      setError(payload.message || "نهایی‌سازی انجام نشد.");
++      if (payload.blockers?.length) {
++        setError(`${payload.message || "نهایی‌سازی انجام نشد."} ${payload.blockers.map((item: { message: string }) => item.message).join(" ")}`);
++      }
++      return;
++    }
++    setData(payload.inspection);
++    setMessage("فهرست شرکت‌کنندگان نهایی شد و مسابقه آماده ورود به مرحله قرعه است.");
++  }
++
++  if (loading) return <Card className="mt-7 p-8 text-center text-[var(--muted)]">در حال بررسی ثبت‌نام‌ها...</Card>;
++  if (!data) return <Alert tone="error" className="mt-7">اطلاعات مسابقه دریافت نشد.</Alert>;
++
++  const unitTitle = data.tournament.participantType === "TEAM" ? "تیم" : "نفر";
++
++  return (
++    <div className="mt-7 space-y-5">
++      {error && <Alert tone="error">{error}</Alert>}
++      {message && <Alert tone="success">{message}</Alert>}
++
++      <Card className="p-5 sm:p-7">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <h2 className="text-xl font-black">{data.tournament.title}</h2>
++            <p className="mt-2 text-sm text-[var(--muted)]">
++              وضعیت فعلی: <strong>{data.tournament.status}</strong>
++            </p>
++          </div>
++          <Button type="button" variant="secondary" onClick={() => void load()}>
++            <RefreshCcw size={16} />بازبینی دوباره
++          </Button>
++        </div>
++
++        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
++          <div className="rounded-2xl bg-[var(--surface-2)] p-4">
++            <UsersRound size={20} className="text-[var(--brand)]" />
++            <strong className="mt-3 block text-2xl">{data.finalUnits.toLocaleString("fa-IR")}</strong>
++            <span className="text-xs text-[var(--muted)]">{unitTitle} قطعی</span>
++          </div>
++          <div className="rounded-2xl bg-[var(--surface-2)] p-4">
++            <ListChecks size={20} className="text-emerald-500" />
++            <strong className="mt-3 block text-2xl">{data.tournament.minimumParticipants.toLocaleString("fa-IR")}</strong>
++            <span className="text-xs text-[var(--muted)]">حداقل لازم</span>
++          </div>
++          <div className="rounded-2xl bg-[var(--surface-2)] p-4">
++            <Clock3 size={20} className="text-amber-500" />
++            <strong className="mt-3 block text-2xl">{data.pendingCount.toLocaleString("fa-IR")}</strong>
++            <span className="text-xs text-[var(--muted)]">ثبت‌نام تعیین‌تکلیف‌نشده</span>
++          </div>
++          <div className="rounded-2xl bg-[var(--surface-2)] p-4">
++            <CheckCircle2 size={20} className="text-sky-500" />
++            <strong className="mt-3 block text-2xl">{data.tournament.capacity.toLocaleString("fa-IR")}</strong>
++            <span className="text-xs text-[var(--muted)]">ظرفیت کل</span>
++          </div>
++        </div>
++      </Card>
++
++      {hardBlockers.map((blocker) => <Alert key={blocker.code} tone="error"><ShieldAlert className="ml-2 inline" size={16} />{blocker.message}</Alert>)}
++      {cleanupWarnings.map((warning) => <Alert key={warning.code} tone="warning">{warning.message} با نهایی‌سازی، این موارد بسته می‌شوند.</Alert>)}
++      {data.readyForDraw && <Alert tone="success">فهرست نهایی است و می‌توانی وارد مدیریت قرعه شوی.</Alert>}
++
++      <Card className="overflow-hidden">
++        <div className="border-b border-[var(--line)] p-5">
++          <h2 className="font-black">فهرست نهایی پیشنهادی</h2>
++          <p className="mt-1 text-xs text-[var(--muted)]">فقط ثبت‌نام‌های قطعی با پرداخت تأییدشده وارد قرعه می‌شوند.</p>
++        </div>
++        <div className="overflow-x-auto">
++          <table className="w-full min-w-[760px] text-right text-sm">
++            <thead className="bg-[var(--surface-2)]"><tr><th className="p-4">شرکت‌کننده</th><th className="p-4">جزئیات</th><th className="p-4">ثبت‌نام</th><th className="p-4">پرداخت</th><th className="p-4">Seed</th></tr></thead>
++            <tbody>
++              {data.finalRegistrations.map((registration) => <tr key={registration.id} className="border-t border-[var(--line)]">
++                <td className="p-4 font-bold">{participantName(registration)}</td>
++                <td className="p-4 text-xs text-[var(--muted)]">{participantDetails(registration)}</td>
++                <td className="p-4">{registrationStatusTitle[registration.status] || registration.status}</td>
++                <td className="p-4">{paymentStatusTitle[registration.paymentStatus || ""] || registration.paymentStatus || "—"}</td>
++                <td className="p-4">{registration.entries.map((entry) => entry.seed).filter((seed) => seed !== null).join("، ") || "—"}</td>
++              </tr>)}
++              {!data.finalRegistrations.length && <tr><td colSpan={5} className="p-8 text-center text-[var(--muted)]">ثبت‌نام قطعی وجود ندارد.</td></tr>}
++            </tbody>
++          </table>
++        </div>
++      </Card>
++
++      {data.pendingRegistrations.length > 0 && <Card className="overflow-hidden">
++        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] p-5">
++          <div><h2 className="font-black">موارد نیازمند تعیین تکلیف</h2><p className="mt-1 text-xs text-[var(--muted)]">قبل از نهایی‌سازی باید پرداخت این ثبت‌نام‌ها بررسی شود.</p></div>
++          <Button href="/admin/payments" variant="secondary">رفتن به پرداخت‌ها</Button>
++        </div>
++        <div className="overflow-x-auto">
++          <table className="w-full min-w-[680px] text-right text-sm">
++            <thead className="bg-[var(--surface-2)]"><tr><th className="p-4">شرکت‌کننده</th><th className="p-4">وضعیت ثبت‌نام</th><th className="p-4">وضعیت پرداخت</th><th className="p-4">موبایل</th></tr></thead>
++            <tbody>{data.pendingRegistrations.map((registration) => <tr key={registration.id} className="border-t border-[var(--line)]"><td className="p-4 font-bold">{participantName(registration)}</td><td className="p-4">{registrationStatusTitle[registration.status] || registration.status}</td><td className="p-4">{paymentStatusTitle[registration.paymentStatus || ""] || registration.paymentStatus || "—"}</td><td className="p-4" dir="ltr">{registration.contactMobile || "—"}</td></tr>)}</tbody>
++          </table>
++        </div>
++      </Card>}
++
++      <Card className="p-5 sm:p-7">
++        <h2 className="font-black">اقدام نهایی</h2>
++        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
++          این عملیات ثبت‌نام را می‌بندد، رزروهای موقت و صف انتظار فعال را خاتمه می‌دهد و فهرست قطعی را برای قرعه آماده می‌کند. پرداخت قطعی یا شرکت‌کننده‌ای حذف نمی‌شود.
++        </p>
++        <div className="mt-5 flex flex-wrap gap-3">
++          <Button
++            type="button"
++            disabled={busy || hardBlockers.length > 0 || data.drawExists || data.readyForDraw}
++            loading={busy}
++            onClick={finalize}
++          >
++            <CheckCircle2 size={17} />نهایی‌سازی شرکت‌کنندگان
++          </Button>
++          {data.readyForDraw && <Button href={`/admin/tournaments/${tournamentId}/draw`} variant="secondary">رفتن به قرعه</Button>}
++        </div>
++      </Card>
++    </div>
++  );
++}
+diff --git a/src/components/admin/tournaments-manager.tsx b/src/components/admin/tournaments-manager.tsx
+index 75bf17b..613049b 100644
+--- a/src/components/admin/tournaments-manager.tsx
++++ b/src/components/admin/tournaments-manager.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ 
+ import { useState } from "react";
+-import { BarChart3, CalendarClock, Edit3, ExternalLink, Shuffle, Trash2 } from "lucide-react";
++import { BarChart3, CalendarClock, Edit3, ExternalLink, ListChecks, Shuffle, Trash2 } from "lucide-react";
+ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+@@ -44,6 +44,6 @@ export function TournamentsManager({ initialItems, permissions }: { initialItems
+   return <>
+     {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+     {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+-    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `schedule:${item.id}`} onClick={() => runAction(item, "schedule")} variant="secondary" size="iconSm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} /></Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runAction(item, "ranking")} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
++    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/participants`} variant="secondary" size="sm" aria-label="نهایی‌سازی شرکت‌کنندگان"><ListChecks size={15} />شرکت‌کنندگان</Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `schedule:${item.id}`} onClick={() => runAction(item, "schedule")} variant="secondary" size="iconSm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} /></Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runAction(item, "ranking")} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
+   </>;
+ }
+diff --git a/src/config/admin-navigation.ts b/src/config/admin-navigation.ts
+index 8ac3a5d..528a8d7 100644
+--- a/src/config/admin-navigation.ts
++++ b/src/config/admin-navigation.ts
+@@ -4,7 +4,7 @@ export const adminNavigation = [
+   { href: "/admin/templates", label: "قالب‌های مسابقه", icon: "CopyPlus" },
+   { href: "/admin/waitlist", label: "صف انتظار", icon: "ListOrdered" },
+   { href: "/admin/players", label: "بازیکنان", icon: "Contact" },
+-  { href: "/admin/participants", label: "شرکت‌کنندگان و حضور", icon: "Users" },
++  { href: "/admin/participants", label: "حضور و غیبت", icon: "Users" },
+   { href: "/admin/matches", label: "بازی‌ها و نتایج", icon: "Swords" },
+   { href: "/admin/disputes", label: "اعتراض‌ها", icon: "Scale" },
+   { href: "/admin/payments", label: "پرداخت‌ها", icon: "WalletCards" },
+diff --git a/src/lib/tournament-engine.ts b/src/lib/tournament-engine.ts
+index fddaed3..9026c36 100644
+--- a/src/lib/tournament-engine.ts
++++ b/src/lib/tournament-engine.ts
+@@ -2,6 +2,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
+ import type { PoolConnection } from "mysql2/promise";
+ import { db } from "@/lib/db";
+ import { planKnockout, type PlannedPairing } from "@/lib/draw-planner";
++import { inspectTournamentParticipants } from "@/lib/tournament-participants";
+ 
+ type Participant = {
+   playerId: number | null;
+@@ -729,6 +730,10 @@ async function ensureDrawCanBeCreated(
+   if (participants.length < Math.max(2, Number(tournament.min_participants || 2))) {
+     throw new Error("MINIMUM_PARTICIPANTS_NOT_REACHED");
+   }
++  const inspection = await inspectTournamentParticipants(connection, tournament.id);
++  if (!inspection?.readyForDraw) {
++    throw new Error("PARTICIPANTS_NOT_FINALIZED");
++  }
+   const [existing] = await connection.query<RowDataPacket[]>(`
+     SELECT id FROM tournament_matches WHERE tournament_id=? LIMIT 1
+   `, [tournament.id]);
+diff --git a/src/lib/tournament-participants.ts b/src/lib/tournament-participants.ts
+new file mode 100644
+index 0000000..15013a9
+--- /dev/null
++++ b/src/lib/tournament-participants.ts
+@@ -0,0 +1,363 @@
++import type { RowDataPacket } from "mysql2";
++import type { PoolConnection } from "mysql2/promise";
++
++const FINAL_STATUSES = new Set(["CONFIRMED", "CHECKED_IN"]);
++const PENDING_STATUSES = new Set([
++  "RESERVED",
++  "PENDING_PAYMENT",
++  "PENDING_APPROVAL",
++  "NEEDS_CORRECTION"
++]);
++
++export type ParticipantBlocker = {
++  code: string;
++  message: string;
++};
++
++export type FinalRegistration = {
++  id: number;
++  publicId: string;
++  status: string;
++  slots: number;
++  contactMobile: string | null;
++  paymentStatus: string | null;
++  entries: Array<{
++    id: number;
++    playerId: number | null;
++    teamId: number | null;
++    name: string;
++    mobile: string | null;
++    seed: number | null;
++    confirmedAt: Date | null;
++    teamMemberCount: number;
++    teamMemberIds: number[];
++    teamMemberNames: string[];
++  }>;
++};
++
++export type TournamentParticipantInspection = {
++  tournament: {
++    id: number;
++    title: string;
++    status: string;
++    participantType: "INDIVIDUAL" | "TEAM";
++    teamSize: number;
++    capacity: number;
++    minimumParticipants: number;
++  };
++  finalRegistrations: FinalRegistration[];
++  pendingRegistrations: FinalRegistration[];
++  finalUnits: number;
++  pendingCount: number;
++  activeHolds: number;
++  activeWaitlist: number;
++  drawExists: boolean;
++  blockers: ParticipantBlocker[];
++  readyForDraw: boolean;
++};
++
++type TournamentRow = RowDataPacket & {
++  id: number;
++  title: string;
++  status: string;
++  participant_type: "INDIVIDUAL" | "TEAM";
++  team_size: number;
++  capacity: number;
++  min_participants: number;
++};
++
++type RegistrationEntryRow = RowDataPacket & {
++  registration_id: number;
++  public_id: string;
++  registration_status: string;
++  slots: number;
++  contact_mobile: string | null;
++  payment_status: string | null;
++  entry_id: number | null;
++  player_id: number | null;
++  team_id: number | null;
++  seed: number | null;
++  confirmed_at: Date | null;
++  entry_name: string | null;
++  entry_mobile: string | null;
++  team_member_count: number | null;
++  team_member_ids: string | null;
++  team_member_names: string | null;
++};
++
++type CountRow = RowDataPacket & { total: number };
++
++function splitIds(value: string | null) {
++  if (!value) return [];
++  return value.split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0);
++}
++
++function splitNames(value: string | null) {
++  if (!value) return [];
++  return value.split("،").map((name) => name.trim()).filter(Boolean);
++}
++
++function registrationMap(rows: RegistrationEntryRow[]) {
++  const registrations = new Map<number, FinalRegistration>();
++
++  for (const row of rows) {
++    let registration = registrations.get(Number(row.registration_id));
++    if (!registration) {
++      registration = {
++        id: Number(row.registration_id),
++        publicId: row.public_id,
++        status: row.registration_status,
++        slots: Number(row.slots),
++        contactMobile: row.contact_mobile,
++        paymentStatus: row.payment_status,
++        entries: []
++      };
++      registrations.set(registration.id, registration);
++    }
++
++    if (row.entry_id) {
++      registration.entries.push({
++        id: Number(row.entry_id),
++        playerId: row.player_id ? Number(row.player_id) : null,
++        teamId: row.team_id ? Number(row.team_id) : null,
++        name: row.entry_name || "بدون نام",
++        mobile: row.entry_mobile,
++        seed: row.seed === null ? null : Number(row.seed),
++        confirmedAt: row.confirmed_at,
++        teamMemberCount: Number(row.team_member_count || 0),
++        teamMemberIds: splitIds(row.team_member_ids),
++        teamMemberNames: splitNames(row.team_member_names)
++      });
++    }
++  }
++
++  return [...registrations.values()];
++}
++
++function addBlocker(blockers: ParticipantBlocker[], code: string, message: string) {
++  if (!blockers.some((item) => item.code === code)) blockers.push({ code, message });
++}
++
++export async function inspectTournamentParticipants(
++  connection: PoolConnection,
++  tournamentId: number
++): Promise<TournamentParticipantInspection | null> {
++  const [tournamentRows] = await connection.query<TournamentRow[]>(`
++    SELECT id,title,status,participant_type,team_size,capacity,min_participants
++    FROM tournaments
++    WHERE id=? AND deleted_at IS NULL
++    LIMIT 1
++  `, [tournamentId]);
++  const tournament = tournamentRows[0];
++  if (!tournament) return null;
++
++  const [entryRows] = await connection.query<RegistrationEntryRow[]>(`
++    SELECT
++      registration.id AS registration_id,
++      registration.public_id,
++      registration.status AS registration_status,
++      registration.slots,
++      registration.contact_mobile,
++      payment.status AS payment_status,
++      entry.id AS entry_id,
++      entry.player_id,
++      entry.team_id,
++      entry.seed,
++      entry.confirmed_at,
++      COALESCE(player.name,team.title) AS entry_name,
++      player.mobile AS entry_mobile,
++      team_info.member_count AS team_member_count,
++      team_info.member_ids AS team_member_ids,
++      team_info.member_names AS team_member_names
++    FROM registrations registration
++    LEFT JOIN registration_entries entry ON entry.registration_id=registration.id
++    LEFT JOIN players player ON player.id=entry.player_id
++    LEFT JOIN teams team ON team.id=entry.team_id
++    LEFT JOIN (
++      SELECT
++        member.team_id,
++        COUNT(*) AS member_count,
++        GROUP_CONCAT(member.player_id ORDER BY member.player_id SEPARATOR ',') AS member_ids,
++        GROUP_CONCAT(COALESCE(team_player.name,'بدون نام') ORDER BY member.id SEPARATOR '،') AS member_names
++      FROM team_members member
++      JOIN players team_player ON team_player.id=member.player_id
++      GROUP BY member.team_id
++    ) team_info ON team_info.team_id=entry.team_id
++    LEFT JOIN payments payment ON payment.id=(
++      SELECT latest.id
++      FROM payments latest
++      WHERE latest.registration_id=registration.id
++      ORDER BY latest.id DESC
++      LIMIT 1
++    )
++    WHERE registration.tournament_id=?
++      AND registration.deleted_at IS NULL
++    ORDER BY registration.created_at,registration.id,entry.id
++  `, [tournamentId]);
++
++  const [holdRows, waitlistRows, drawRows] = await Promise.all([
++    connection.query<CountRow[]>(`
++      SELECT COUNT(*) AS total
++      FROM registration_holds
++      WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()
++    `, [tournamentId]),
++    connection.query<CountRow[]>(`
++      SELECT COUNT(*) AS total
++      FROM waitlist_entries
++      WHERE tournament_id=?
++        AND (
++          status='WAITING'
++          OR (status='OFFERED' AND offer_expires_at>NOW())
++        )
++    `, [tournamentId]),
++    connection.query<CountRow[]>(`
++      SELECT COUNT(*) AS total FROM tournament_matches WHERE tournament_id=?
++    `, [tournamentId])
++  ]);
++
++  const registrations = registrationMap(entryRows);
++  const finalRegistrations = registrations.filter((item) => FINAL_STATUSES.has(item.status));
++  const pendingRegistrations = registrations.filter((item) => PENDING_STATUSES.has(item.status));
++  const activeHolds = Number(holdRows[0][0]?.total || 0);
++  const activeWaitlist = Number(waitlistRows[0][0]?.total || 0);
++  const drawExists = Number(drawRows[0][0]?.total || 0) > 0;
++  const blockers: ParticipantBlocker[] = [];
++  const participantKeys = new Set<string>();
++  const teamMemberOwners = new Map<number, string>();
++
++  if (!["REGISTRATION_OPEN", "REGISTRATION_CLOSED"].includes(tournament.status)) {
++    addBlocker(
++      blockers,
++      "INVALID_TOURNAMENT_STATUS",
++      "نهایی‌سازی فقط وقتی ممکن است که ثبت‌نام باز یا بسته باشد."
++    );
++  }
++  if (drawExists) {
++    addBlocker(blockers, "DRAW_EXISTS", "قرعه قبلاً ساخته شده و فهرست شرکت‌کنندگان قفل است.");
++  }
++  if (pendingRegistrations.length) {
++    addBlocker(
++      blockers,
++      "PENDING_REGISTRATIONS",
++      `${pendingRegistrations.length.toLocaleString("fa-IR")} ثبت‌نام هنوز از نظر پرداخت تعیین تکلیف نشده است.`
++    );
++  }
++  if (activeHolds) {
++    addBlocker(
++      blockers,
++      "ACTIVE_HOLDS",
++      `${activeHolds.toLocaleString("fa-IR")} رزرو موقت فعال وجود دارد.`
++    );
++  }
++  if (activeWaitlist) {
++    addBlocker(
++      blockers,
++      "ACTIVE_WAITLIST",
++      `${activeWaitlist.toLocaleString("fa-IR")} رکورد فعال در صف انتظار وجود دارد.`
++    );
++  }
++
++  for (const registration of finalRegistrations) {
++    if (registration.paymentStatus !== "APPROVED") {
++      addBlocker(
++        blockers,
++        "PAYMENT_MISMATCH",
++        "حداقل یک ثبت‌نام قطعی، پرداخت تأییدشده ندارد."
++      );
++    }
++
++    if (tournament.participant_type === "INDIVIDUAL") {
++      if (registration.entries.length !== registration.slots) {
++        addBlocker(
++          blockers,
++          "ENTRY_COUNT_MISMATCH",
++          "تعداد بازیکنان یکی از ثبت‌نام‌های انفرادی با تعداد سهم‌های آن برابر نیست."
++        );
++      }
++      for (const entry of registration.entries) {
++        if (!entry.playerId || entry.teamId) {
++          addBlocker(blockers, "INVALID_ENTRY", "حداقل یک ورودی انفرادی اطلاعات بازیکن معتبر ندارد.");
++          continue;
++        }
++        const key = `p:${entry.playerId}`;
++        if (participantKeys.has(key)) {
++          addBlocker(blockers, "DUPLICATE_PARTICIPANT", "یک بازیکن بیش از یک بار در فهرست نهایی قرار گرفته است.");
++        }
++        participantKeys.add(key);
++      }
++    } else {
++      if (registration.slots !== 1 || registration.entries.length !== 1) {
++        addBlocker(
++          blockers,
++          "TEAM_ENTRY_COUNT_MISMATCH",
++          "هر ثبت‌نام تیمی باید دقیقاً شامل یک تیم باشد."
++        );
++      }
++      for (const entry of registration.entries) {
++        if (!entry.teamId || entry.playerId) {
++          addBlocker(blockers, "INVALID_TEAM_ENTRY", "حداقل یک ورودی تیمی اطلاعات تیم معتبر ندارد.");
++          continue;
++        }
++        const teamKey = `t:${entry.teamId}`;
++        if (participantKeys.has(teamKey)) {
++          addBlocker(blockers, "DUPLICATE_TEAM", "یک تیم بیش از یک بار در فهرست نهایی قرار گرفته است.");
++        }
++        participantKeys.add(teamKey);
++        if (entry.teamMemberCount !== Number(tournament.team_size)) {
++          addBlocker(
++            blockers,
++            "TEAM_SIZE_MISMATCH",
++            `حداقل یک تیم دقیقاً ${Number(tournament.team_size).toLocaleString("fa-IR")} عضو ندارد.`
++          );
++        }
++        for (const memberId of entry.teamMemberIds) {
++          const owner = teamMemberOwners.get(memberId);
++          if (owner && owner !== teamKey) {
++            addBlocker(
++              blockers,
++              "DUPLICATE_TEAM_MEMBER",
++              "یک بازیکن در بیش از یک تیم نهایی حضور دارد."
++            );
++          }
++          teamMemberOwners.set(memberId, teamKey);
++        }
++      }
++    }
++  }
++
++  const finalUnits = tournament.participant_type === "TEAM"
++    ? finalRegistrations.reduce((sum, item) => sum + item.entries.filter((entry) => entry.teamId).length, 0)
++    : finalRegistrations.reduce((sum, item) => sum + item.entries.filter((entry) => entry.playerId).length, 0);
++
++  if (finalUnits < Math.max(2, Number(tournament.min_participants))) {
++    addBlocker(
++      blockers,
++      "MINIMUM_NOT_REACHED",
++      `تعداد نهایی شرکت‌کنندگان (${finalUnits.toLocaleString("fa-IR")}) از حداقل مسابقه کمتر است.`
++    );
++  }
++  if (finalUnits > Number(tournament.capacity)) {
++    addBlocker(blockers, "CAPACITY_EXCEEDED", "تعداد نهایی شرکت‌کنندگان از ظرفیت مسابقه بیشتر است.");
++  }
++
++  return {
++    tournament: {
++      id: Number(tournament.id),
++      title: tournament.title,
++      status: tournament.status,
++      participantType: tournament.participant_type,
++      teamSize: Number(tournament.team_size),
++      capacity: Number(tournament.capacity),
++      minimumParticipants: Number(tournament.min_participants)
++    },
++    finalRegistrations,
++    pendingRegistrations,
++    finalUnits,
++    pendingCount: pendingRegistrations.length,
++    activeHolds,
++    activeWaitlist,
++    drawExists,
++    blockers,
++    readyForDraw: tournament.status === "REGISTRATION_CLOSED" && blockers.length === 0
++  };
++}

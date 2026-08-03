@@ -1,0 +1,1019 @@
+diff --git a/src/app/(public)/tournaments/[slug]/page.tsx b/src/app/(public)/tournaments/[slug]/page.tsx
+index a92cf6f..c25ff72 100644
+--- a/src/app/(public)/tournaments/[slug]/page.tsx
++++ b/src/app/(public)/tournaments/[slug]/page.tsx
+@@ -9,6 +9,7 @@ import {
+   Trophy,
+   Users
+ } from "lucide-react";
++import { Alert } from "@/components/ui/alert";
+ import { Badge } from "@/components/ui/badge";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+@@ -70,7 +71,46 @@ export default async function TournamentDetail({
+     LIMIT 200
+   `, [Number(item.id)]);
+ 
+-  const left = Math.max(0, item.capacity - item.registered);
++  const left = item.remainingCapacity;
++  const capacityUnit = item.participantType === "TEAM" ? "تیم" : "نفر";
++  const paymentEnabled = runtimeSettings.payment.cardToCard
++    || runtimeSettings.payment.pos
++    || runtimeSettings.payment.cash;
++  const now = Date.now();
++  const registrationStarted = !item.registrationStartsAt
++    || new Date(item.registrationStartsAt).getTime() <= now;
++  const registrationNotEnded = !item.registrationEndsAt
++    || new Date(item.registrationEndsAt).getTime() > now;
++  const tournamentNotStarted = new Date(item.startsAt).getTime() > now;
++  const registrationOpen = item.statusCode === "REGISTRATION_OPEN"
++    && registrationStarted
++    && registrationNotEnded
++    && tournamentNotStarted;
++  const capacityFull = left <= 0;
++
++  let registrationMessage = "";
++  if (!paymentEnabled) {
++    registrationMessage = "روش پرداخت فعالی برای این مسابقه تعریف نشده است.";
++  } else if (item.statusCode === "PUBLISHED" && !registrationStarted && item.registrationStartsAt) {
++    registrationMessage = `ثبت‌نام از ${new Intl.DateTimeFormat("fa-IR", {
++      dateStyle: "short",
++      timeStyle: "short"
++    }).format(new Date(item.registrationStartsAt))} آغاز می‌شود.`;
++  } else if (!registrationOpen) {
++    registrationMessage = item.statusCode === "REGISTRATION_CLOSED"
++      ? "مهلت ثبت‌نام این مسابقه پایان یافته است."
++      : item.statusCode === "RUNNING"
++        ? "این مسابقه در حال برگزاری است."
++        : item.statusCode === "COMPLETED"
++          ? "این مسابقه پایان یافته است."
++          : "ثبت‌نام این مسابقه در حال حاضر فعال نیست.";
++  } else if (capacityFull && !item.waitlistEnabled) {
++    registrationMessage = "ظرفیت این مسابقه تکمیل شده و صف انتظار فعال نیست.";
++  }
++
++  const showRegistrationForm = paymentEnabled
++    && registrationOpen
++    && (!capacityFull || item.waitlistEnabled);
+ 
+   return (
+     <div className="page-shell">
+@@ -102,7 +142,7 @@ export default async function TournamentDetail({
+               <Info
+                 icon={<Users />}
+                 title="ظرفیت"
+-                value={`${item.registered.toLocaleString("fa-IR")} از ${item.capacity.toLocaleString("fa-IR")} نفر`}
++                value={`${item.registered.toLocaleString("fa-IR")} از ${item.capacity.toLocaleString("fa-IR")} ${capacityUnit}`}
+               />
+               <Info icon={<Trophy />} title="جایزه" value={item.prize} />
+               <Info icon={<Clock3 />} title="نوع شرکت" value={item.participantMode} />
+@@ -159,19 +199,33 @@ export default async function TournamentDetail({
+           <Card className="p-6">
+             <div className="flex items-end justify-between">
+               <div>
+-                <p className="text-xs text-[var(--muted)]">هزینه ثبت‌نام هر نفر</p>
++                <p className="text-xs text-[var(--muted)]">هزینه ثبت‌نام هر {capacityUnit}</p>
+                 <strong className="mt-1 block text-xl">{formatToman(item.price)}</strong>
+               </div>
+               <span className="text-sm font-black text-[var(--brand)]">
+-                {left.toLocaleString("fa-IR")} ظرفیت باقی‌مانده
++                {left.toLocaleString("fa-IR")} {capacityUnit} باقی‌مانده
+               </span>
+             </div>
+             <div className="my-5 h-px bg-[var(--line)]" />
+-            <RegisterTournamentForm
+-              tournament={item}
+-              initialUser={user ? { name: user.name, mobile: user.mobile } : null}
+-              paymentSettings={runtimeSettings.payment}
+-            />
++            {registrationMessage && <Alert tone={capacityFull ? "warning" : "info"}>
++              {registrationMessage}
++            </Alert>}
++            {capacityFull && item.waitlistEnabled && registrationOpen && (
++              <Alert tone="warning" className={registrationMessage ? "mt-3" : ""}>
++                ظرفیت تکمیل شده است؛ می‌توانید اطلاعات خود را وارد و مستقیماً وارد صف انتظار شوید.
++              </Alert>
++            )}
++            {showRegistrationForm && (
++              <div className={registrationMessage || capacityFull ? "mt-5" : ""}>
++                <RegisterTournamentForm
++                  tournament={item}
++                  initialUser={user ? { name: user.name, mobile: user.mobile } : null}
++                  paymentSettings={runtimeSettings.payment}
++                  holdMinutes={runtimeSettings.registration.holdMinutes}
++                  capacityFull={capacityFull}
++                />
++              </div>
++            )}
+           </Card>
+           <Button variant="secondary"><Share2 size={17} />اشتراک‌گذاری مسابقه</Button>
+         </aside>
+diff --git a/src/app/api/registration-holds/route.ts b/src/app/api/registration-holds/route.ts
+index 5af892c..476a116 100644
+--- a/src/app/api/registration-holds/route.ts
++++ b/src/app/api/registration-holds/route.ts
+@@ -60,6 +60,10 @@ type RateRow = RowDataPacket & {
+   hourly_count: number;
+ };
+ 
++type ActiveWaitlistRow = RowDataPacket & {
++  status: "WAITING" | "OFFERED";
++};
++
+ type OwnedTeamRow = RowDataPacket & { id: number; title: string };
+ type OwnedTeamMemberRow = RowDataPacket & { player_id: number; name: string; mobile: string | null };
+ 
+@@ -219,6 +223,29 @@ export async function POST(request: Request) {
+       `, [tournament.id, userId]);
+       const existingHold = existingRows[0] || null;
+ 
++      if (!existingHold) {
++        const [activeWaitlistRows] = await connection.query<ActiveWaitlistRow[]>(`
++          SELECT status
++          FROM waitlist_entries
++          WHERE user_id=?
++            AND tournament_id=?
++            AND status IN ('WAITING','OFFERED')
++          ORDER BY id DESC
++          LIMIT 1
++          FOR UPDATE
++        `, [userId, tournament.id]);
++        const activeWaitlist = activeWaitlistRows[0];
++        if (activeWaitlist) {
++          await connection.rollback();
++          return NextResponse.json({
++            message: activeWaitlist.status === "OFFERED"
++              ? "برای شما ظرفیت پیشنهاد شده است؛ از بخش صف انتظار حساب کاربری آن را بپذیرید."
++              : "شما قبلاً در صف انتظار این مسابقه هستید.",
++            waitlistActive: true
++          }, { status: 409 });
++        }
++      }
++
+       if (!existingHold && requestIp) {
+         const [rateRows] = await connection.query<RateRow[]>(`
+           SELECT COUNT(*) AS hourly_count
+@@ -263,6 +290,13 @@ export async function POST(request: Request) {
+               AND rh.id<>?
+               AND JSON_SEARCH(rh.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
+           )
++          OR EXISTS (
++            SELECT 1
++            FROM waitlist_entries w
++            WHERE w.tournament_id=?
++              AND w.status IN ('WAITING','OFFERED')
++              AND JSON_SEARCH(w.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
++          )
+           LIMIT 1
+         `, [
+           mobile,
+@@ -271,6 +305,8 @@ export async function POST(request: Request) {
+           mobile,
+           tournament.id,
+           existingHold?.id || 0,
++          mobile,
++          tournament.id,
+           mobile
+         ]);
+ 
+diff --git a/src/app/api/registrations/route.ts b/src/app/api/registrations/route.ts
+index 54dd69d..7006ba2 100644
+--- a/src/app/api/registrations/route.ts
++++ b/src/app/api/registrations/route.ts
+@@ -63,6 +63,7 @@ type TournamentRow = RowDataPacket & {
+   capacity: number;
+   reservation_expires_min: number;
+   status: string;
++  starts_at: Date;
+ };
+ 
+ type CountRow = RowDataPacket & {
+@@ -205,13 +206,23 @@ export async function POST(request: Request) {
+         }
+ 
+         return NextResponse.json({
+-          message: "مهلت ۱۵ دقیقه‌ای رزرو ظرفیت به پایان رسیده است. دوباره ظرفیت را رزرو کنید.",
++          message: "مهلت رزرو موقت ظرفیت به پایان رسیده است. دوباره ظرفیت را رزرو کنید.",
+           expired: true
+         }, { status: 410 });
+       }
+ 
++      const currentPlayers = parsePlayerData(hold.player_data);
++      const preliminaryMobiles = preliminaryPlayers.map((player) => player.mobile);
++      const currentMobiles = currentPlayers.map((player) => player.mobile);
++      if (JSON.stringify(currentMobiles) !== JSON.stringify(preliminaryMobiles)) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "اطلاعات شرکت‌کنندگان رزرو موقت تغییر کرده است؛ دوباره ظرفیت را رزرو کنید."
++        }, { status: 409 });
++      }
++
+       const [tournamentRows] = await connection.query<TournamentRow[]>(`
+-        SELECT id,title,capacity,reservation_expires_min,status
++        SELECT id,title,capacity,reservation_expires_min,status,starts_at
+         FROM tournaments
+         WHERE id=? AND deleted_at IS NULL
+         LIMIT 1
+@@ -224,12 +235,15 @@ export async function POST(request: Request) {
+         return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
+       }
+ 
+-      if (tournament.status !== "REGISTRATION_OPEN") {
++      if (
++        tournament.status !== "REGISTRATION_OPEN"
++        || new Date(tournament.starts_at).getTime() <= Date.now()
++      ) {
+         await connection.rollback();
+         return NextResponse.json({ message: "ثبت‌نام این مسابقه فعال نیست." }, { status: 409 });
+       }
+ 
+-      const players = parsePlayerData(hold.player_data);
++      const players = currentPlayers;
+       if (!players.length) {
+         await connection.rollback();
+         return NextResponse.json({ message: "اطلاعات شرکت‌کنندگان نامعتبر است." }, { status: 409 });
+diff --git a/src/app/api/tournaments/[id]/route.ts b/src/app/api/tournaments/[id]/route.ts
+index 055d266..bd85d7b 100644
+--- a/src/app/api/tournaments/[id]/route.ts
++++ b/src/app/api/tournaments/[id]/route.ts
+@@ -10,6 +10,7 @@ import {
+   type TournamentStatus
+ } from "@/lib/tournament-definition";
+ import { tournamentInputSchema } from "@/lib/tournament-input";
++import { offerNextWaitlistEntries } from "@/lib/waitlist";
+ 
+ type TournamentRow = RowDataPacket & {
+   id: number;
+@@ -318,6 +319,10 @@ export async function PATCH(
+         id
+       ]);
+ 
++      if (input.capacity > Number(old.capacity)) {
++        await offerNextWaitlistEntries(connection, Number(id));
++      }
++
+       await connection.commit();
+     } catch (error) {
+       await connection.rollback();
+diff --git a/src/app/api/waitlist/[id]/route.ts b/src/app/api/waitlist/[id]/route.ts
+index 786e1b2..947d1bc 100644
+--- a/src/app/api/waitlist/[id]/route.ts
++++ b/src/app/api/waitlist/[id]/route.ts
+@@ -3,7 +3,15 @@ import { z } from "zod";
+ import type { RowDataPacket } from "mysql2";
+ import { getSession } from "@/lib/auth";
+ import { db } from "@/lib/db";
+-import { createHoldToken, parsePlayerData } from "@/lib/registration-flow";
++import {
++  acquirePlayerMobileLocks,
++  releasePlayerMobileLocks
++} from "@/lib/player-identity";
++import {
++  createHoldToken,
++  expireStaleRegistrationState,
++  parsePlayerData
++} from "@/lib/registration-flow";
+ import { getRuntimeSettings } from "@/lib/runtime-settings";
+ import { getAvailableSlots, offerNextWaitlistEntries } from "@/lib/waitlist";
+ 
+@@ -25,6 +33,10 @@ type WaitRow = RowDataPacket & {
+   existing_team_id: number | null;
+   slots: number;
+   amount: number;
++  tournament_status: string;
++  registration_starts_at: Date | null;
++  registration_ends_at: Date | null;
++  tournament_starts_at: Date;
+ };
+ 
+ type TeamMemberRow = RowDataPacket & {
+@@ -80,14 +92,37 @@ export async function PATCH(
+     const runtime = await getRuntimeSettings();
+     const userId = Number(user.id);
+     const connection = await db.getConnection();
++    let mobileLocks: string[] = [];
+ 
+     try {
+-      await connection.beginTransaction();
+-      const [rows] = await connection.query<WaitRow[]>(`
+-        SELECT *
++      const [preliminaryRows] = await connection.query<(RowDataPacket & { player_data: unknown })[]>(`
++        SELECT player_data
+         FROM waitlist_entries
+         WHERE id=? AND user_id=?
+         LIMIT 1
++      `, [id, userId]);
++      if (!preliminaryRows[0]) {
++        return NextResponse.json({ message: "رکورد صف انتظار یافت نشد." }, { status: 404 });
++      }
++      const preliminaryPlayers = parsePlayerData(preliminaryRows[0].player_data);
++      const preliminaryMobiles = preliminaryPlayers.map((player) => player.mobile);
++      if (!preliminaryPlayers.length || preliminaryMobiles.some((mobile) => !/^09\d{9}$/.test(mobile))) {
++        return NextResponse.json({ message: "اطلاعات شرکت‌کنندگان صف انتظار نامعتبر است." }, { status: 409 });
++      }
++      mobileLocks = await acquirePlayerMobileLocks(connection, preliminaryMobiles);
++
++      await connection.beginTransaction();
++      await expireStaleRegistrationState(connection);
++      const [rows] = await connection.query<WaitRow[]>(`
++        SELECT w.*,
++          t.status AS tournament_status,
++          t.registration_starts_at,
++          t.registration_ends_at,
++          t.starts_at AS tournament_starts_at
++        FROM waitlist_entries w
++        JOIN tournaments t ON t.id=w.tournament_id AND t.deleted_at IS NULL
++        WHERE w.id=? AND w.user_id=?
++        LIMIT 1
+         FOR UPDATE
+       `, [id, userId]);
+       const item = rows[0];
+@@ -97,7 +132,38 @@ export async function PATCH(
+         return NextResponse.json({ message: "رکورد صف انتظار یافت نشد." }, { status: 404 });
+       }
+ 
++      const currentMobiles = parsePlayerData(item.player_data).map((player) => player.mobile);
++      if (JSON.stringify(currentMobiles) !== JSON.stringify(preliminaryMobiles)) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "اطلاعات صف انتظار تغییر کرده است؛ صفحه را تازه‌سازی و دوباره تلاش کنید."
++        }, { status: 409 });
++      }
++
+       if (input.action === "accept") {
++        const now = Date.now();
++        const registrationStarted = !item.registration_starts_at
++          || new Date(item.registration_starts_at).getTime() <= now;
++        const registrationNotEnded = !item.registration_ends_at
++          || new Date(item.registration_ends_at).getTime() > now;
++        const tournamentNotStarted = new Date(item.tournament_starts_at).getTime() > now;
++        if (
++          item.tournament_status !== "REGISTRATION_OPEN"
++          || !registrationStarted
++          || !registrationNotEnded
++          || !tournamentNotStarted
++        ) {
++          await connection.execute(`
++            UPDATE waitlist_entries
++            SET status='EXPIRED',updated_at=NOW()
++            WHERE id=? AND status='OFFERED'
++          `, [item.id]);
++          await connection.commit();
++          return NextResponse.json({
++            message: "ثبت‌نام این مسابقه دیگر فعال نیست."
++          }, { status: 409 });
++        }
++
+         const offerExpired = !item.offer_expires_at
+           || new Date(item.offer_expires_at).getTime() <= Date.now();
+         if (
+@@ -125,6 +191,43 @@ export async function PATCH(
+           }, { status: 409 });
+         }
+ 
++        for (const mobile of currentMobiles) {
++          const [duplicates] = await connection.query<RowDataPacket[]>(`
++            SELECT 1
++            WHERE EXISTS (
++              SELECT 1
++              FROM registrations r
++              JOIN registration_entries re ON re.registration_id=r.id
++              LEFT JOIN players p ON p.id=re.player_id
++              LEFT JOIN team_members tm ON tm.team_id=re.team_id
++              LEFT JOIN players tp ON tp.id=tm.player_id
++              WHERE r.tournament_id=?
++                AND r.deleted_at IS NULL
++                AND (
++                  r.status IN ('RESERVED','PENDING_APPROVAL','CONFIRMED','CHECKED_IN')
++                  OR (r.status='PENDING_PAYMENT' AND (r.reserved_until IS NULL OR r.reserved_until>NOW()))
++                  OR (r.status='NEEDS_CORRECTION' AND r.correction_expires_at>NOW())
++                )
++                AND (p.mobile=? OR tp.mobile=?)
++            )
++            OR EXISTS (
++              SELECT 1
++              FROM registration_holds rh
++              WHERE rh.tournament_id=?
++                AND rh.status='ACTIVE'
++                AND rh.expires_at>NOW()
++                AND JSON_SEARCH(rh.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
++            )
++            LIMIT 1
++          `, [item.tournament_id, mobile, mobile, item.tournament_id, mobile]);
++          if (duplicates[0]) {
++            await connection.rollback();
++            return NextResponse.json({
++              message: `شماره ${mobile} قبلاً در این مسابقه ثبت یا رزرو شده است.`
++            }, { status: 409 });
++          }
++        }
++
+         const available = await getAvailableSlots(connection, item.tournament_id, item.id);
+         if (available < Number(item.slots)) {
+           await connection.rollback();
+@@ -180,9 +283,15 @@ export async function PATCH(
+       await connection.rollback();
+       throw error;
+     } finally {
++      await releasePlayerMobileLocks(connection, mobileLocks);
+       connection.release();
+     }
+   } catch (error) {
++    if (error instanceof Error && error.message === "PLAYER_IDENTITY_LOCK_TIMEOUT") {
++      return NextResponse.json({
++        message: "درخواست دیگری برای یکی از این شماره‌ها در حال پردازش است. دوباره تلاش کنید."
++      }, { status: 409 });
++    }
+     if (error instanceof z.ZodError) {
+       return NextResponse.json({ message: "درخواست نامعتبر است." }, { status: 422 });
+     }
+diff --git a/src/app/api/waitlist/route.ts b/src/app/api/waitlist/route.ts
+index b84096c..9d61951 100644
+--- a/src/app/api/waitlist/route.ts
++++ b/src/app/api/waitlist/route.ts
+@@ -3,6 +3,11 @@ import { z } from "zod";
+ import type { ResultSetHeader, RowDataPacket } from "mysql2";
+ import { getSession } from "@/lib/auth";
+ import { db, queryRows } from "@/lib/db";
++import {
++  acquirePlayerMobileLocks,
++  releasePlayerMobileLocks
++} from "@/lib/player-identity";
++import { expireStaleRegistrationState } from "@/lib/registration-flow";
+ import { getAvailableSlots, newWaitlistPublicId } from "@/lib/waitlist";
+ import { assertPaymentMethodEnabled } from "@/lib/runtime-settings";
+ 
+@@ -82,7 +87,21 @@ export async function GET() {
+ 
+   const rows = await queryRows<RowDataPacket[]>(`
+     SELECT
+-      w.id,w.public_id,w.status,w.position,w.slots,w.amount,w.offer_token,
++      w.id,w.public_id,w.status,w.position,
++      CASE
++        WHEN w.status='WAITING' THEN 1 + (
++          SELECT COUNT(*)
++          FROM waitlist_entries earlier
++          WHERE earlier.tournament_id=w.tournament_id
++            AND earlier.status='WAITING'
++            AND (
++              earlier.position<w.position
++              OR (earlier.position=w.position AND earlier.id<w.id)
++            )
++        )
++        ELSE w.position
++      END AS current_position,
++      w.slots,w.amount,w.offer_token,
+       w.offered_at,w.offer_expires_at,w.created_at,w.tournament_id,
+       w.existing_team_id,t.title AS tournament_title,t.slug
+     FROM waitlist_entries w
+@@ -106,10 +125,22 @@ export async function POST(request: Request) {
+     const input = schema.parse(await request.json());
+     await assertPaymentMethodEnabled(input.paymentMethod);
+     const userId = Number(user.id);
++    const requestedPlayers = input.players.map((player) => ({
++      name: player.name.trim(),
++      mobile: player.mobile.trim()
++    }));
++    const requestedMobiles = requestedPlayers.map((player) => player.mobile);
++    if (new Set(requestedMobiles).size !== requestedMobiles.length) {
++      return NextResponse.json({ message: "هر شماره موبایل را فقط یک‌بار وارد کنید." }, { status: 409 });
++    }
++
+     const connection = await db.getConnection();
++    let mobileLocks: string[] = [];
+ 
+     try {
++      mobileLocks = await acquirePlayerMobileLocks(connection, requestedMobiles);
+       await connection.beginTransaction();
++      await expireStaleRegistrationState(connection);
+ 
+       const [rows] = await connection.query<TournamentRow[]>(`
+         SELECT
+@@ -139,10 +170,7 @@ export async function POST(request: Request) {
+         return NextResponse.json({ message: "صف انتظار برای این مسابقه غیرفعال است." }, { status: 409 });
+       }
+ 
+-      let players = input.players.map((player) => ({
+-        name: player.name.trim(),
+-        mobile: player.mobile.trim()
+-      }));
++      let players = requestedPlayers;
+       let teamTitle = input.teamTitle?.trim() || null;
+       let existingTeamId: number | null = null;
+ 
+@@ -158,10 +186,17 @@ export async function POST(request: Request) {
+           return NextResponse.json({ message: "فقط کاپیتان می‌تواند این تیم را وارد صف کند." }, { status: 403 });
+         }
+ 
+-        players = ownedTeam.members.map((member) => ({
++        const currentPlayers = ownedTeam.members.map((member) => ({
+           name: member.name,
+           mobile: member.mobile!
+         }));
++        if (JSON.stringify(currentPlayers.map((player) => player.mobile)) !== JSON.stringify(requestedMobiles)) {
++          await connection.rollback();
++          return NextResponse.json({
++            message: "ترکیب تیم تغییر کرده است؛ فرم را تازه‌سازی و دوباره تلاش کنید."
++          }, { status: 409 });
++        }
++        players = currentPlayers;
+         teamTitle = ownedTeam.team.title;
+         existingTeamId = ownedTeam.team.id;
+       }
+@@ -223,6 +258,14 @@ export async function POST(request: Request) {
+               AND r.status NOT IN ('CANCELLED','REJECTED','EXPIRED','NO_SHOW')
+               AND (p.mobile=? OR tp.mobile=?)
+           )
++          OR EXISTS (
++            SELECT 1
++            FROM registration_holds rh
++            WHERE rh.tournament_id=?
++              AND rh.status='ACTIVE'
++              AND rh.expires_at>NOW()
++              AND JSON_SEARCH(rh.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
++          )
+           OR EXISTS (
+             SELECT 1
+             FROM waitlist_entries w
+@@ -231,7 +274,15 @@ export async function POST(request: Request) {
+               AND JSON_SEARCH(w.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
+           )
+           LIMIT 1
+-        `, [tournament.id, mobile, mobile, tournament.id, mobile]);
++        `, [
++          tournament.id,
++          mobile,
++          mobile,
++          tournament.id,
++          mobile,
++          tournament.id,
++          mobile
++        ]);
+ 
+         if (duplicates[0]) {
+           await connection.rollback();
+@@ -279,6 +330,7 @@ export async function POST(request: Request) {
+       await connection.rollback();
+       throw error;
+     } finally {
++      await releasePlayerMobileLocks(connection, mobileLocks);
+       connection.release();
+     }
+   } catch (error) {
+@@ -293,6 +345,12 @@ export async function POST(request: Request) {
+       return NextResponse.json({ message: "این روش پرداخت غیرفعال است." }, { status: 409 });
+     }
+ 
++    if (error instanceof Error && error.message === "PLAYER_IDENTITY_LOCK_TIMEOUT") {
++      return NextResponse.json({
++        message: "درخواست دیگری برای یکی از این شماره‌ها در حال پردازش است. دوباره تلاش کنید."
++      }, { status: 409 });
++    }
++
+     if (error instanceof Error && error.message === "TEAM_MEMBER_MOBILE_REQUIRED") {
+       return NextResponse.json({
+         message: "همه اعضای تیم باید شماره موبایل معتبر داشته باشند."
+diff --git a/src/components/account/waitlist-manager.tsx b/src/components/account/waitlist-manager.tsx
+index 4cd9c0f..0436867 100644
+--- a/src/components/account/waitlist-manager.tsx
++++ b/src/components/account/waitlist-manager.tsx
+@@ -1,5 +1,179 @@
+-/* eslint-disable react-hooks/set-state-in-effect */
+-"use client";
+-import { useEffect,useState } from "react";import { Alert } from "@/components/ui/alert";import { Button } from "@/components/ui/button";import { Card } from "@/components/ui/card";
+-type Item={id:number|string;status:string;position:number;slots:number;amount:number;offer_token?:string|null;offer_expires_at?:string|null;tournament_title:string;slug:string;tournament_id:number|string};const labels:Record<string,string>={WAITING:'در صف',OFFERED:'ظرفیت پیشنهادی',CONVERTED:'تبدیل به رزرو',EXPIRED:'منقضی',DECLINED:'ردشده',CANCELLED:'لغوشده'};
+-export function WaitlistManager(){const[items,setItems]=useState<Item[]>([]);const[error,setError]=useState('');const[message,setMessage]=useState('');const[loading,setLoading]=useState(true);async function load(){setLoading(true);const r=await fetch('/api/waitlist',{cache:'no-store'});const p=await r.json();setLoading(false);if(!r.ok)return setError(p.message||'دریافت صف انتظار انجام نشد.');setItems(p.items||[])}useEffect(()=>{void load()},[]);async function action(item:Item,action:'accept'|'cancel'|'decline'){setError('');setMessage('');const r=await fetch(`/api/waitlist/${item.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,offerToken:item.offer_token||undefined})});const p=await r.json();if(!r.ok)return setError(p.message||'عملیات انجام نشد.');if(action==='accept'&&p.holdToken){sessionStorage.setItem(`cgs-registration-hold-${item.tournament_id}`,JSON.stringify({token:p.holdToken,expiresAt:p.expiresAt}));setMessage('ظرفیت برای شما رزرو شد؛ وارد صفحه مسابقه شوید و پرداخت را تکمیل کنید.')}await load()}return <>{error&&<Alert tone="error" className="mt-4">{error}</Alert>}{message&&<Alert tone="success" className="mt-4">{message}</Alert>}<div className="mt-7 grid gap-4">{items.map(i=><Card key={i.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{i.tournament_title}</strong><p className="mt-1 text-xs text-[var(--muted)]">موقعیت صف: {Number(i.position).toLocaleString('fa-IR')} · {Number(i.slots).toLocaleString('fa-IR')} سهم</p></div><span className="rounded-full bg-[var(--surface-2)] px-3 py-1 text-xs font-bold">{labels[i.status]||i.status}</span></div>{i.status==='OFFERED'&&<Alert tone="success" className="mt-4">ظرفیت آزاد شده است. تا {i.offer_expires_at?new Intl.DateTimeFormat('fa-IR',{dateStyle:'short',timeStyle:'short'}).format(new Date(i.offer_expires_at)):'پایان مهلت'} پیشنهاد را بپذیرید.</Alert>}<div className="mt-4 flex flex-wrap gap-2">{i.status==='OFFERED'&&<><Button size="sm" onClick={()=>action(i,'accept')}>پذیرش و رزرو</Button><Button size="sm" variant="secondary" onClick={()=>action(i,'decline')}>رد پیشنهاد</Button></>}{i.status==='WAITING'&&<Button size="sm" variant="dangerSoft" onClick={()=>action(i,'cancel')}>خروج از صف</Button>}<Button href={`/tournaments/${i.slug}`} size="sm" variant="ghost">مشاهده مسابقه</Button></div></Card>)}{!loading&&!items.length&&<Card className="p-8 text-center text-[var(--muted)]">در صف انتظار مسابقه‌ای نیستید.</Card>}</div></>}
++/* eslint-disable react-hooks/set-state-in-effect */
++"use client";
++
++import { useEffect, useState } from "react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++
++type WaitlistItem = {
++  id: number | string;
++  status: string;
++  position: number;
++  current_position?: number;
++  slots: number;
++  amount: number;
++  offer_token?: string | null;
++  offer_expires_at?: string | null;
++  tournament_title: string;
++  slug: string;
++  tournament_id: number | string;
++};
++
++const statusLabels: Record<string, string> = {
++  WAITING: "در صف",
++  OFFERED: "ظرفیت پیشنهادی",
++  CONVERTED: "تبدیل به رزرو",
++  EXPIRED: "منقضی",
++  DECLINED: "ردشده",
++  CANCELLED: "لغوشده"
++};
++
++export function WaitlistManager() {
++  const [items, setItems] = useState<WaitlistItem[]>([]);
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++  const [loading, setLoading] = useState(true);
++  const [actionId, setActionId] = useState<string | null>(null);
++
++  async function load() {
++    setLoading(true);
++    const response = await fetch("/api/waitlist", { cache: "no-store" });
++    const payload = await response.json();
++    setLoading(false);
++
++    if (!response.ok) {
++      setError(payload.message || "دریافت صف انتظار انجام نشد.");
++      return;
++    }
++
++    setItems(payload.items || []);
++  }
++
++  useEffect(() => {
++    void load();
++  }, []);
++
++  async function runAction(
++    item: WaitlistItem,
++    action: "accept" | "cancel" | "decline"
++  ) {
++    setError("");
++    setMessage("");
++    setActionId(String(item.id));
++
++    try {
++      const response = await fetch(`/api/waitlist/${item.id}`, {
++        method: "PATCH",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({
++          action,
++          offerToken: item.offer_token || undefined
++        })
++      });
++      const payload = await response.json();
++
++      if (!response.ok) {
++        setError(payload.message || "عملیات انجام نشد.");
++        return;
++      }
++
++      if (action === "accept" && payload.holdToken) {
++        sessionStorage.setItem(
++          `cgs-registration-hold-${item.tournament_id}`,
++          JSON.stringify({ token: payload.holdToken, expiresAt: payload.expiresAt })
++        );
++        setMessage("ظرفیت برای شما رزرو شد؛ وارد صفحه مسابقه شوید و ثبت‌نام را تکمیل کنید.");
++      }
++
++      await load();
++    } finally {
++      setActionId(null);
++    }
++  }
++
++  return (
++    <>
++      {error && <Alert tone="error" className="mt-4">{error}</Alert>}
++      {message && <Alert tone="success" className="mt-4">{message}</Alert>}
++
++      <div className="mt-7 grid gap-4">
++        {items.map((item) => {
++          const busy = actionId === String(item.id);
++          const currentPosition = Number(item.current_position || item.position);
++
++          return (
++            <Card key={item.id} className="p-5">
++              <div className="flex flex-wrap items-start justify-between gap-3">
++                <div>
++                  <strong>{item.tournament_title}</strong>
++                  <p className="mt-1 text-xs text-[var(--muted)]">
++                    {item.status === "WAITING"
++                      ? `موقعیت فعلی صف: ${currentPosition.toLocaleString("fa-IR")}`
++                      : `شماره اولیه صف: ${Number(item.position).toLocaleString("fa-IR")}`}
++                    {` · ${Number(item.slots).toLocaleString("fa-IR")} سهم`}
++                  </p>
++                </div>
++                <span className="rounded-full bg-[var(--surface-2)] px-3 py-1 text-xs font-bold">
++                  {statusLabels[item.status] || item.status}
++                </span>
++              </div>
++
++              {item.status === "OFFERED" && (
++                <Alert tone="success" className="mt-4">
++                  ظرفیت آزاد شده است. تا {item.offer_expires_at
++                    ? new Intl.DateTimeFormat("fa-IR", {
++                        dateStyle: "short",
++                        timeStyle: "short"
++                      }).format(new Date(item.offer_expires_at))
++                    : "پایان مهلت"} پیشنهاد را بپذیرید.
++                </Alert>
++              )}
++
++              <div className="mt-4 flex flex-wrap gap-2">
++                {item.status === "OFFERED" && (
++                  <>
++                    <Button
++                      size="sm"
++                      loading={busy}
++                      onClick={() => runAction(item, "accept")}
++                    >
++                      پذیرش و رزرو
++                    </Button>
++                    <Button
++                      size="sm"
++                      variant="secondary"
++                      disabled={busy}
++                      onClick={() => runAction(item, "decline")}
++                    >
++                      رد پیشنهاد
++                    </Button>
++                  </>
++                )}
++                {item.status === "WAITING" && (
++                  <Button
++                    size="sm"
++                    variant="dangerSoft"
++                    loading={busy}
++                    onClick={() => runAction(item, "cancel")}
++                  >
++                    خروج از صف
++                  </Button>
++                )}
++                <Button href={`/tournaments/${item.slug}`} size="sm" variant="ghost">
++                  مشاهده مسابقه
++                </Button>
++              </div>
++            </Card>
++          );
++        })}
++
++        {!loading && !items.length && (
++          <Card className="p-8 text-center text-[var(--muted)]">
++            در صف انتظار مسابقه‌ای نیستید.
++          </Card>
++        )}
++      </div>
++    </>
++  );
++}
+diff --git a/src/components/forms/register-tournament-form.tsx b/src/components/forms/register-tournament-form.tsx
+index 1f95399..980c3ac 100644
+--- a/src/components/forms/register-tournament-form.tsx
++++ b/src/components/forms/register-tournament-form.tsx
+@@ -77,16 +77,20 @@ function formatRemaining(totalSeconds: number) {
+ export function RegisterTournamentForm({
+   tournament,
+   initialUser,
+-  paymentSettings
++  paymentSettings,
++  holdMinutes,
++  capacityFull
+ }: {
+   tournament: Tournament;
+   initialUser?: { name?: string; mobile?: string } | null;
+   paymentSettings: { cardToCard: boolean; pos: boolean; cash: boolean };
++  holdMinutes: number;
++  capacityFull: boolean;
+ }) {
+-  const teamSize = useMemo(() => {
+-    const match = tournament.participantMode.match(/تیمی\s+(\d+)/);
+-    return match ? Number(match[1]) : 0;
+-  }, [tournament.participantMode]);
++  const teamSize = useMemo(
++    () => tournament.participantType === "TEAM" ? tournament.teamSize : 0,
++    [tournament.participantType, tournament.teamSize]
++  );
+   const isTeam = teamSize > 0;
+ 
+   const [players, setPlayers] = useState<PlayerInput[]>(
+@@ -122,10 +126,13 @@ export function RegisterTournamentForm({
+   const [loading, setLoading] = useState(false);
+   const [copyDone, setCopyDone] = useState("");
+   const [error, setError] = useState("");
+-  const [waitlistAvailable, setWaitlistAvailable] = useState(false);
++  const [waitlistAvailable, setWaitlistAvailable] = useState(
++    capacityFull && tournament.waitlistEnabled
++  );
+   const [waitlistJoined, setWaitlistJoined] = useState(false);
+ 
+   const totalAmount = tournament.price * (isTeam ? 1 : players.length);
++  const maxIndividualPlayers = Math.min(20, tournament.capacity);
+   const holdStorageKey = `cgs-registration-hold-${tournament.id}`;
+ 
+   useEffect(() => {
+@@ -313,7 +320,12 @@ export function RegisterTournamentForm({
+         })
+       });
+       const payload = await response.json();
+-      if (!response.ok) throw new Error(payload.message || "ورود به صف انتظار انجام نشد.");
++      if (!response.ok) {
++        if (payload.capacityAvailable) {
++          setWaitlistAvailable(false);
++        }
++        throw new Error(payload.message || "ورود به صف انتظار انجام نشد.");
++      }
+       setWaitlistJoined(true);
+       setWaitlistAvailable(false);
+     } catch (caught) {
+@@ -323,6 +335,14 @@ export function RegisterTournamentForm({
+     }
+   }
+ 
++  async function continueAfterIdentity() {
++    if (waitlistAvailable) {
++      await joinWaitlist();
++      return;
++    }
++    await createHold();
++  }
++
+   async function submitInitialDetails(event: React.FormEvent) {
+     event.preventDefault();
+     setError("");
+@@ -334,7 +354,7 @@ export function RegisterTournamentForm({
+     }
+ 
+     if (initialUser?.mobile) {
+-      await createHold();
++      await continueAfterIdentity();
+       return;
+     }
+ 
+@@ -388,7 +408,7 @@ export function RegisterTournamentForm({
+       const payload = await response.json();
+       if (!response.ok) throw new Error(payload.message || "تأیید کد انجام نشد.");
+ 
+-      await createHold();
++      await continueAfterIdentity();
+     } catch (caught) {
+       setError(caught instanceof Error ? caught.message : "تأیید کد انجام نشد.");
+       setLoading(false);
+@@ -600,7 +620,9 @@ export function RegisterTournamentForm({
+             <h3 className="font-black">تأیید شماره موبایل ثبت‌کننده</h3>
+           </div>
+           <p className="mt-2 text-xs leading-6 text-[var(--muted)]">
+-            اطلاعات اولیه حفظ شده است. پس از تأیید شماره، وارد حساب می‌شوید و ظرفیت ۱۵ دقیقه رزرو خواهد شد.
++            {waitlistAvailable
++              ? "اطلاعات اولیه حفظ شده است. پس از تأیید شماره، وارد حساب و صف انتظار می‌شوید."
++              : `اطلاعات اولیه حفظ شده است. پس از تأیید شماره، وارد حساب می‌شوید و ظرفیت ${holdMinutes.toLocaleString("fa-IR")} دقیقه رزرو خواهد شد.`}
+           </p>
+         </div>
+ 
+@@ -910,7 +932,7 @@ export function RegisterTournamentForm({
+         </div>
+       ))}
+ 
+-      {!isTeam && (
++      {!isTeam && tournament.allowMultiSlot && players.length < maxIndividualPlayers && (
+         <Button
+           type="button"
+           variant="secondary"
+@@ -930,19 +952,16 @@ export function RegisterTournamentForm({
+ 
+       {initialUser?.mobile && (
+         <Alert tone="success">
+-          با شماره <span dir="ltr">{initialUser.mobile}</span> وارد شده‌اید. پس از ادامه، ظرفیت برای ۱۵ دقیقه رزرو می‌شود.
++          با شماره <span dir="ltr">{initialUser.mobile}</span> وارد شده‌اید. پس از ادامه، ظرفیت برای {holdMinutes.toLocaleString("fa-IR")} دقیقه رزرو می‌شود.
+         </Alert>
+       )}
+ 
+       {error && <Alert tone="error">{error}</Alert>}
+       {waitlistJoined && <Alert tone="success">در صف انتظار ثبت شدید. وضعیت و پیشنهاد ظرفیت را از حساب کاربری پیگیری کنید.</Alert>}
+-      {waitlistAvailable && !waitlistJoined && (
+-        <Button type="button" variant="secondary" loading={loading} onClick={joinWaitlist}>
+-          ورود به صف انتظار
+-        </Button>
+-      )}
+       <Button type="submit" loading={loading} loadingText="در حال بررسی..." disabled={waitlistJoined}>
+-        ادامه و رزرو ۱۵ دقیقه‌ای ظرفیت
++        {waitlistAvailable
++          ? "ورود به صف انتظار"
++          : `ادامه و رزرو ${holdMinutes.toLocaleString("fa-IR")} دقیقه‌ای ظرفیت`}
+       </Button>
+     </form>
+   );
+diff --git a/src/lib/repositories/tournaments.ts b/src/lib/repositories/tournaments.ts
+index 33bd6a1..5148b84 100644
+--- a/src/lib/repositories/tournaments.ts
++++ b/src/lib/repositories/tournaments.ts
+@@ -12,7 +12,11 @@ type TournamentRow = RowDataPacket & {
+   participant_type: string;
+   team_size: number;
+   status: string;
++  registration_starts_at: Date | null;
++  registration_ends_at: Date | null;
+   starts_at: Date;
++  allow_multi_slot: number;
++  waitlist_mode: string;
+   capacity: number;
+   price: number;
+   rules: unknown;
+@@ -83,13 +87,22 @@ function mapDbTournament(item: TournamentRow): Tournament {
+     gameTitle: item.game_title,
+     format: item.format,
+     participantMode: item.participant_type === "TEAM" ? `تیمی ${item.team_size} نفره` : "انفرادی",
++    participantType: item.participant_type === "TEAM" ? "TEAM" : "INDIVIDUAL",
++    teamSize: Number(item.team_size || 1),
+     status: statusMap[item.status] || "به‌زودی",
++    statusCode: item.status,
+     date: new Intl.DateTimeFormat("fa-IR", { dateStyle: "full" }).format(startsAt),
+     time: new Intl.DateTimeFormat("fa-IR", { timeStyle: "short" }).format(startsAt),
+     venue: item.venue_title || "محل اعلام می‌شود",
+     venueType: item.venue_type === "external" ? "external" : "internal",
+-    capacity: item.capacity,
++    capacity: Number(item.capacity),
+     registered: Number(item.registered_count || 0),
++    remainingCapacity: Math.max(0, Number(item.capacity) - Number(item.registered_count || 0)),
++    allowMultiSlot: Boolean(item.allow_multi_slot),
++    waitlistEnabled: item.waitlist_mode !== "disabled",
++    registrationStartsAt: item.registration_starts_at ? new Date(item.registration_starts_at).toISOString() : null,
++    registrationEndsAt: item.registration_ends_at ? new Date(item.registration_ends_at).toISOString() : null,
++    startsAt: startsAt.toISOString(),
+     price: Number(item.price),
+     prize: mapPrize(item.prize_settings),
+     cover: item.cover_image_url || "linear-gradient(135deg,#0d7c47,#111827,#d4a11f)",
+@@ -103,7 +116,8 @@ function mapDbTournament(item: TournamentRow): Tournament {
+ const baseSql = `
+   SELECT
+     t.id,t.slug,t.title,t.description,t.format,t.participant_type,
+-    t.team_size,t.status,t.starts_at,t.capacity,t.price,t.rules,t.prize_settings,
++    t.team_size,t.status,t.registration_starts_at,t.registration_ends_at,t.starts_at,
++    t.allow_multi_slot,t.waitlist_mode,t.capacity,t.price,t.rules,t.prize_settings,
+     t.cover_image_url,t.is_featured,g.slug AS game_slug,
+     g.title AS game_title,v.title AS venue_title,v.type AS venue_type,
+     (
+@@ -156,7 +170,8 @@ export async function listHomeTournaments(requestedLimit: number): Promise<Tourn
+   const rows = await queryRows<TournamentRow[]>(`
+     SELECT
+       c.id,c.slug,c.title,c.description,c.format,c.participant_type,
+-      c.team_size,c.status,c.starts_at,c.capacity,c.price,c.rules,c.prize_settings,
++      c.team_size,c.status,c.registration_starts_at,c.registration_ends_at,c.starts_at,
++      c.allow_multi_slot,c.waitlist_mode,c.capacity,c.price,c.rules,c.prize_settings,
+       c.cover_image_url,c.is_featured,c.game_slug,c.game_title,c.venue_title,c.venue_type,
+       (
+         SELECT COALESCE(SUM(
+@@ -189,7 +204,8 @@ export async function listHomeTournaments(requestedLimit: number): Promise<Tourn
+     FROM (
+       SELECT
+         t.id,t.slug,t.title,t.description,t.format,t.participant_type,
+-        t.team_size,t.status,t.starts_at,t.capacity,t.price,t.rules,t.prize_settings,
++        t.team_size,t.status,t.registration_starts_at,t.registration_ends_at,t.starts_at,
++        t.allow_multi_slot,t.waitlist_mode,t.capacity,t.price,t.rules,t.prize_settings,
+         t.cover_image_url,t.is_featured,g.slug AS game_slug,g.title AS game_title,
+         v.title AS venue_title,v.type AS venue_type
+       FROM tournaments t
+diff --git a/src/lib/waitlist.ts b/src/lib/waitlist.ts
+index 545aaae..447d212 100644
+--- a/src/lib/waitlist.ts
++++ b/src/lib/waitlist.ts
+@@ -33,7 +33,16 @@ export async function offerNextWaitlistEntries(connection: PoolConnection, tourn
+     const [rows] = await connection.query<WaitlistRow[]>(`
+       SELECT w.id,w.user_id,w.tournament_id,w.slots,t.title
+       FROM waitlist_entries w JOIN tournaments t ON t.id=w.tournament_id
+-      WHERE w.tournament_id=? AND w.status='WAITING' AND w.cancelled_at IS NULL AND w.user_id IS NOT NULL
++      WHERE w.tournament_id=?
++        AND w.status='WAITING'
++        AND w.cancelled_at IS NULL
++        AND w.user_id IS NOT NULL
++        AND t.deleted_at IS NULL
++        AND t.status='REGISTRATION_OPEN'
++        AND t.waitlist_mode<>'disabled'
++        AND (t.registration_starts_at IS NULL OR t.registration_starts_at<=NOW())
++        AND (t.registration_ends_at IS NULL OR t.registration_ends_at>NOW())
++        AND t.starts_at>NOW()
+       ORDER BY w.position ASC,w.id ASC LIMIT 1 FOR UPDATE
+     `, [tournamentId]);
+     const item = rows[0];
+diff --git a/src/types/index.ts b/src/types/index.ts
+index 7e64d54..d18c6c5 100644
+--- a/src/types/index.ts
++++ b/src/types/index.ts
+@@ -14,13 +14,22 @@ export interface Tournament {
+   gameTitle: string;
+   format: string;
+   participantMode: string;
++  participantType: "INDIVIDUAL" | "TEAM";
++  teamSize: number;
+   status: TournamentStatus;
++  statusCode: string;
+   date: string;
+   time: string;
+   venue: string;
+   venueType: "internal" | "external";
+   capacity: number;
+   registered: number;
++  remainingCapacity: number;
++  allowMultiSlot: boolean;
++  waitlistEnabled: boolean;
++  registrationStartsAt: string | null;
++  registrationEndsAt: string | null;
++  startsAt: string;
+   price: number;
+   prize: string;
+   cover: string;

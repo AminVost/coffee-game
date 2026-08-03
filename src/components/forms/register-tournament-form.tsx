@@ -77,16 +77,20 @@ function formatRemaining(totalSeconds: number) {
 export function RegisterTournamentForm({
   tournament,
   initialUser,
-  paymentSettings
+  paymentSettings,
+  holdMinutes,
+  capacityFull
 }: {
   tournament: Tournament;
   initialUser?: { name?: string; mobile?: string } | null;
   paymentSettings: { cardToCard: boolean; pos: boolean; cash: boolean };
+  holdMinutes: number;
+  capacityFull: boolean;
 }) {
-  const teamSize = useMemo(() => {
-    const match = tournament.participantMode.match(/تیمی\s+(\d+)/);
-    return match ? Number(match[1]) : 0;
-  }, [tournament.participantMode]);
+  const teamSize = useMemo(
+    () => tournament.participantType === "TEAM" ? tournament.teamSize : 0,
+    [tournament.participantType, tournament.teamSize]
+  );
   const isTeam = teamSize > 0;
 
   const [players, setPlayers] = useState<PlayerInput[]>(
@@ -122,10 +126,13 @@ export function RegisterTournamentForm({
   const [loading, setLoading] = useState(false);
   const [copyDone, setCopyDone] = useState("");
   const [error, setError] = useState("");
-  const [waitlistAvailable, setWaitlistAvailable] = useState(false);
+  const [waitlistAvailable, setWaitlistAvailable] = useState(
+    capacityFull && tournament.waitlistEnabled
+  );
   const [waitlistJoined, setWaitlistJoined] = useState(false);
 
   const totalAmount = tournament.price * (isTeam ? 1 : players.length);
+  const maxIndividualPlayers = Math.min(20, tournament.capacity);
   const holdStorageKey = `cgs-registration-hold-${tournament.id}`;
 
   useEffect(() => {
@@ -313,7 +320,12 @@ export function RegisterTournamentForm({
         })
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.message || "ورود به صف انتظار انجام نشد.");
+      if (!response.ok) {
+        if (payload.capacityAvailable) {
+          setWaitlistAvailable(false);
+        }
+        throw new Error(payload.message || "ورود به صف انتظار انجام نشد.");
+      }
       setWaitlistJoined(true);
       setWaitlistAvailable(false);
     } catch (caught) {
@@ -321,6 +333,14 @@ export function RegisterTournamentForm({
     } finally {
       setLoading(false);
     }
+  }
+
+  async function continueAfterIdentity() {
+    if (waitlistAvailable) {
+      await joinWaitlist();
+      return;
+    }
+    await createHold();
   }
 
   async function submitInitialDetails(event: React.FormEvent) {
@@ -334,7 +354,7 @@ export function RegisterTournamentForm({
     }
 
     if (initialUser?.mobile) {
-      await createHold();
+      await continueAfterIdentity();
       return;
     }
 
@@ -388,7 +408,7 @@ export function RegisterTournamentForm({
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message || "تأیید کد انجام نشد.");
 
-      await createHold();
+      await continueAfterIdentity();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "تأیید کد انجام نشد.");
       setLoading(false);
@@ -600,7 +620,9 @@ export function RegisterTournamentForm({
             <h3 className="font-black">تأیید شماره موبایل ثبت‌کننده</h3>
           </div>
           <p className="mt-2 text-xs leading-6 text-[var(--muted)]">
-            اطلاعات اولیه حفظ شده است. پس از تأیید شماره، وارد حساب می‌شوید و ظرفیت ۱۵ دقیقه رزرو خواهد شد.
+            {waitlistAvailable
+              ? "اطلاعات اولیه حفظ شده است. پس از تأیید شماره، وارد حساب و صف انتظار می‌شوید."
+              : `اطلاعات اولیه حفظ شده است. پس از تأیید شماره، وارد حساب می‌شوید و ظرفیت ${holdMinutes.toLocaleString("fa-IR")} دقیقه رزرو خواهد شد.`}
           </p>
         </div>
 
@@ -910,7 +932,7 @@ export function RegisterTournamentForm({
         </div>
       ))}
 
-      {!isTeam && (
+      {!isTeam && tournament.allowMultiSlot && players.length < maxIndividualPlayers && (
         <Button
           type="button"
           variant="secondary"
@@ -930,19 +952,16 @@ export function RegisterTournamentForm({
 
       {initialUser?.mobile && (
         <Alert tone="success">
-          با شماره <span dir="ltr">{initialUser.mobile}</span> وارد شده‌اید. پس از ادامه، ظرفیت برای ۱۵ دقیقه رزرو می‌شود.
+          با شماره <span dir="ltr">{initialUser.mobile}</span> وارد شده‌اید. پس از ادامه، ظرفیت برای {holdMinutes.toLocaleString("fa-IR")} دقیقه رزرو می‌شود.
         </Alert>
       )}
 
       {error && <Alert tone="error">{error}</Alert>}
       {waitlistJoined && <Alert tone="success">در صف انتظار ثبت شدید. وضعیت و پیشنهاد ظرفیت را از حساب کاربری پیگیری کنید.</Alert>}
-      {waitlistAvailable && !waitlistJoined && (
-        <Button type="button" variant="secondary" loading={loading} onClick={joinWaitlist}>
-          ورود به صف انتظار
-        </Button>
-      )}
       <Button type="submit" loading={loading} loadingText="در حال بررسی..." disabled={waitlistJoined}>
-        ادامه و رزرو ۱۵ دقیقه‌ای ظرفیت
+        {waitlistAvailable
+          ? "ورود به صف انتظار"
+          : `ادامه و رزرو ${holdMinutes.toLocaleString("fa-IR")} دقیقه‌ای ظرفیت`}
       </Button>
     </form>
   );

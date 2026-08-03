@@ -26,22 +26,12 @@ export function HomeHero({
     : 0;
 
   return (
-    <section className="relative isolate overflow-hidden border-b border-[var(--line)]">
+    <section className="home-hero-surface relative isolate overflow-hidden border-b border-[var(--line)]">
       <div className="hero-grid absolute inset-0 -z-20" />
-      <div className="hero-noise absolute inset-0 -z-10" />
-      <div
-        aria-hidden="true"
-        className="absolute -right-36 top-4 -z-10 h-[420px] w-[420px] rounded-full bg-emerald-500/20 blur-[120px]"
-      />
-      <div
-        aria-hidden="true"
-        className="absolute -left-32 bottom-0 -z-10 h-[380px] w-[380px] rounded-full bg-amber-400/15 blur-[115px]"
-      />
-
-      <div className="container-shell grid min-h-[720px] items-center gap-14 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-20">
+      <div className="container-shell grid min-h-[640px] items-center gap-14 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-20">
         <div
         >
-          <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-xs font-black text-emerald-500 shadow-sm backdrop-blur">
+          <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-xs font-black text-emerald-500 shadow-sm">
             <Sparkles size={15} />
             مسابقه، رزرو و نتیجه در یک تجربه روان
           </span>
@@ -70,15 +60,15 @@ export function HomeHero({
           </div>
 
           <div className="mt-11 grid max-w-2xl grid-cols-1 gap-3 text-sm font-bold text-[var(--muted)] sm:grid-cols-3">
-            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)]/70 px-3.5 py-3 backdrop-blur">
+            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3">
               <ShieldCheck className="text-[var(--brand)]" size={18} />
               رزرو و پرداخت امن
             </span>
-            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)]/70 px-3.5 py-3 backdrop-blur">
+            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3">
               <Users className="text-[var(--brand)]" size={18} />
               فردی و تیمی
             </span>
-            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)]/70 px-3.5 py-3 backdrop-blur">
+            <span className="flex items-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3">
               <Gamepad2 className="text-[var(--brand)]" size={18} />
               بهینه برای موبایل
             </span>
@@ -89,7 +79,7 @@ export function HomeHero({
           className="relative mx-auto w-full max-w-[560px]"
         >
           <div
-            className="glass-panel relative overflow-hidden rounded-[2rem] p-4 sm:p-5"
+            className="home-feature-panel relative overflow-hidden rounded-[2rem] p-4 sm:p-5"
           >
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-400/70 to-transparent" />
 
@@ -182,7 +172,7 @@ export function HomeHero({
 
           <div
             aria-hidden="true"
-            className="absolute -left-3 top-16 hidden rounded-2xl border border-amber-400/20 bg-[#161208]/90 px-4 py-3 text-xs font-black text-amber-300 shadow-xl backdrop-blur sm:block"
+            className="absolute -left-3 top-16 hidden rounded-2xl border border-amber-400/20 bg-[#161208]/90 px-4 py-3 text-xs font-black text-amber-300 shadow-xl sm:block"
           >
             قرعه‌کشی زنده
           </div>

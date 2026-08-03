@@ -1,0 +1,2199 @@
+diff --git a/src/app/admin/tournaments/[id]/edit/page.tsx b/src/app/admin/tournaments/[id]/edit/page.tsx
+index 341b703..86b97a0 100644
+--- a/src/app/admin/tournaments/[id]/edit/page.tsx
++++ b/src/app/admin/tournaments/[id]/edit/page.tsx
+@@ -1,7 +1,146 @@
+-import { notFound } from "next/navigation";
+-import type { RowDataPacket } from "mysql2";
+-import { TournamentEditForm } from "@/components/admin/tournament-edit-form";
+-import { queryRows } from "@/lib/db";
+-import { requireAdminPage } from "@/lib/page-authorization";
+-function localDate(value:Date|null){if(!value)return '';const d=new Date(value);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16)}function json(value:unknown){try{return JSON.stringify(typeof value==='string'?JSON.parse(value):value||{},null,2)}catch{return '{}'}}
+-export default async function EditTournament({params}:{params:Promise<{id:string}>}){await requireAdminPage('tournaments.manage');const{id}=await params;const[rows,games,venues,templates]=await Promise.all([queryRows<RowDataPacket[]>(`SELECT * FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1`,[id]),queryRows<RowDataPacket[]>(`SELECT id,title FROM games WHERE is_active=1 ORDER BY title`),queryRows<RowDataPacket[]>(`SELECT id,title FROM venues WHERE is_active=1 ORDER BY title`),queryRows<RowDataPacket[]>(`SELECT id,title FROM tournament_templates WHERE is_active=1 ORDER BY title`)]);const r=rows[0];if(!r)notFound();const rules=typeof r.rules==='string'?JSON.parse(r.rules||'[]'):r.rules||[];const initial={id:String(r.id),title:String(r.title),slug:String(r.slug),subtitle:String(r.subtitle||''),description:String(r.description||''),gameId:Number(r.game_id),templateId:r.template_id?Number(r.template_id):null,venueId:r.venue_id?Number(r.venue_id):null,format:String(r.format),participantType:r.participant_type as 'INDIVIDUAL'|'TEAM',teamSize:Number(r.team_size),capacity:Number(r.capacity),minParticipants:Number(r.min_participants),price:Number(r.price),status:String(r.status),registrationStartsAt:localDate(r.registration_starts_at),registrationEndsAt:localDate(r.registration_ends_at),startsAt:localDate(r.starts_at),endsAt:localDate(r.ends_at),reservationExpiresMin:Number(r.reservation_expires_min),lateToleranceMin:Number(r.late_tolerance_min),waitlistMode:String(r.waitlist_mode),allowMultiSlot:Boolean(r.allow_multi_slot),hasThirdPlace:Boolean(r.has_third_place),drawMode:String(r.draw_mode),rulesText:Array.isArray(rules)?rules.join('\n'):'',gameSettingsText:json(r.game_settings),scoringSettingsText:json(r.scoring_settings),notificationSettingsText:json(r.notification_settings),cancellationSettingsText:json(r.cancellation_settings),prizeSettingsText:json(r.prize_settings),coverImageUrl:String(r.cover_image_url||''),isFeatured:Boolean(r.is_featured)};return <div><p className="section-kicker">EDIT TOURNAMENT</p><h1 className="section-title mt-2">ویرایش کامل مسابقه</h1><TournamentEditForm initial={initial} games={games.map(v=>({id:Number(v.id),title:String(v.title)}))} venues={venues.map(v=>({id:Number(v.id),title:String(v.title)}))} templates={templates.map(v=>({id:Number(v.id),title:String(v.title)}))}/></div>}
++import { notFound } from "next/navigation";
++import type { RowDataPacket } from "mysql2";
++import { TournamentEditForm } from "@/components/admin/tournament-edit-form";
++import { queryRows } from "@/lib/db";
++import { requireAdminPage } from "@/lib/page-authorization";
++import type { TournamentFormat, TournamentStatus } from "@/lib/tournament-definition";
++
++function localDate(value: Date | null) {
++  if (!value) return "";
++  const date = new Date(value);
++  return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
++    .toISOString()
++    .slice(0, 16);
++}
++
++function json(value: unknown) {
++  try {
++    return JSON.stringify(typeof value === "string" ? JSON.parse(value) : value || {}, null, 2);
++  } catch {
++    return "{}";
++  }
++}
++
++export default async function EditTournament({ params }: { params: Promise<{ id: string }> }) {
++  await requireAdminPage("tournaments.manage");
++  const { id } = await params;
++
++  const [rows, games, venues, templates, countRows] = await Promise.all([
++    queryRows<RowDataPacket[]>(`
++      SELECT * FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1
++    `, [id]),
++    queryRows<RowDataPacket[]>(`SELECT id,title FROM games WHERE is_active=1 ORDER BY title`),
++    queryRows<RowDataPacket[]>(`SELECT id,title FROM venues WHERE is_active=1 ORDER BY title`),
++    queryRows<RowDataPacket[]>(`SELECT id,title FROM tournament_templates WHERE is_active=1 ORDER BY title`),
++    queryRows<RowDataPacket[]>(`
++      SELECT
++        (SELECT COUNT(*) FROM registrations WHERE tournament_id=? AND deleted_at IS NULL) AS registration_count,
++        (
++          SELECT COUNT(*)
++          FROM registrations
++          WHERE tournament_id=?
++            AND deleted_at IS NULL
++            AND status NOT IN ('CANCELLED','REJECTED','EXPIRED','NO_SHOW')
++        ) AS active_registration_count,
++        (SELECT COUNT(*) FROM tournament_matches WHERE tournament_id=?) AS match_count,
++        (
++          SELECT COUNT(*)
++          FROM registration_holds
++          WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()
++        ) AS hold_count,
++        (
++          SELECT COUNT(*)
++          FROM waitlist_entries
++          WHERE tournament_id=? AND status IN ('WAITING','OFFERED')
++        ) AS waitlist_count,
++        (
++          SELECT COALESCE(SUM(
++            CASE
++              WHEN status IN ('RESERVED','PENDING_APPROVAL','CONFIRMED','CHECKED_IN') THEN slots
++              WHEN status='PENDING_PAYMENT' AND (reserved_until IS NULL OR reserved_until>NOW()) THEN slots
++              WHEN status='NEEDS_CORRECTION' AND correction_expires_at>NOW() THEN slots
++              ELSE 0
++            END
++          ),0)
++          FROM registrations
++          WHERE tournament_id=? AND deleted_at IS NULL
++        )
++        +
++        (
++          SELECT COALESCE(SUM(slots),0)
++          FROM registration_holds
++          WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()
++        )
++        +
++        (
++          SELECT COALESCE(SUM(slots),0)
++          FROM waitlist_entries
++          WHERE tournament_id=? AND status='OFFERED' AND offer_expires_at>NOW()
++        ) AS occupied
++    `, [id, id, id, id, id, id, id, id])
++  ]);
++
++  const row = rows[0];
++  if (!row) notFound();
++
++  const rules = typeof row.rules === "string" ? JSON.parse(row.rules || "[]") : row.rules || [];
++  const counts = countRows[0] || {};
++
++  const initial = {
++    id: String(row.id),
++    title: String(row.title),
++    slug: String(row.slug),
++    subtitle: String(row.subtitle || ""),
++    description: String(row.description || ""),
++    gameId: Number(row.game_id),
++    templateId: row.template_id ? Number(row.template_id) : null,
++    venueId: row.venue_id ? Number(row.venue_id) : null,
++    format: String(row.format) as TournamentFormat,
++    participantType: row.participant_type as "INDIVIDUAL" | "TEAM",
++    teamSize: Number(row.team_size),
++    capacity: Number(row.capacity),
++    minParticipants: Number(row.min_participants),
++    price: Number(row.price),
++    status: String(row.status) as TournamentStatus,
++    registrationStartsAt: localDate(row.registration_starts_at),
++    registrationEndsAt: localDate(row.registration_ends_at),
++    startsAt: localDate(row.starts_at),
++    endsAt: localDate(row.ends_at),
++    reservationExpiresMin: Number(row.reservation_expires_min),
++    lateToleranceMin: Number(row.late_tolerance_min),
++    waitlistMode: String(row.waitlist_mode) as "disabled" | "offer" | "manual" | "automatic",
++    allowMultiSlot: Boolean(row.allow_multi_slot),
++    hasThirdPlace: Boolean(row.has_third_place),
++    drawMode: String(row.draw_mode) as "random" | "seeded" | "custom",
++    rulesText: Array.isArray(rules) ? rules.join("\n") : "",
++    gameSettingsText: json(row.game_settings),
++    scoringSettingsText: json(row.scoring_settings),
++    notificationSettingsText: json(row.notification_settings),
++    cancellationSettingsText: json(row.cancellation_settings),
++    prizeSettingsText: json(row.prize_settings),
++    coverImageUrl: String(row.cover_image_url || ""),
++    isFeatured: Boolean(row.is_featured)
++  };
++
++  const meta = {
++    registrationCount: Number(counts.registration_count || 0),
++    activeRegistrationCount: Number(counts.active_registration_count || 0),
++    matchCount: Number(counts.match_count || 0),
++    holdCount: Number(counts.hold_count || 0),
++    waitlistCount: Number(counts.waitlist_count || 0),
++    occupied: Number(counts.occupied || 0)
++  };
++
++  return <div>
++    <p className="section-kicker">EDIT TOURNAMENT</p>
++    <h1 className="section-title mt-2">ویرایش مسابقه</h1>
++    <p className="mt-2 text-sm text-[var(--muted)]">فیلدهایی که به ثبت‌نام یا قرعه وابسته‌اند، بعد از ایجاد داده عملیاتی به‌صورت خودکار قفل می‌شوند.</p>
++    <TournamentEditForm
++      initial={initial}
++      games={games.map((item) => ({ id: Number(item.id), title: String(item.title) }))}
++      venues={venues.map((item) => ({ id: Number(item.id), title: String(item.title) }))}
++      templates={templates.map((item) => ({ id: Number(item.id), title: String(item.title) }))}
++      meta={meta}
++    />
++  </div>;
++}
+diff --git a/src/app/api/tournaments/[id]/route.ts b/src/app/api/tournaments/[id]/route.ts
+index 2bf8691..055d266 100644
+--- a/src/app/api/tournaments/[id]/route.ts
++++ b/src/app/api/tournaments/[id]/route.ts
+@@ -1,308 +1,406 @@
+-import { NextResponse } from "next/server";
+-import { z } from "zod";
+-import type { RowDataPacket } from "mysql2";
+-import { authorize } from "@/lib/authorization";
+-import { writeAuditLog } from "@/lib/audit";
+-import { db, queryRows } from "@/lib/db";
+-import { tournamentInputSchema } from "@/lib/tournament-input";
+-
+-type TournamentRow = RowDataPacket & {
+-  id: number;
+-  slug: string;
+-  title: string;
+-  status: string;
+-  capacity: number;
+-  game_id: number;
+-  participant_type: string;
+-  team_size: number;
+-  format: string;
+-  template_id: number | null;
+-};
+-
+-type CountRow = RowDataPacket & {
+-  registration_count: number;
+-  match_count: number;
+-  hold_count: number;
+-  waitlist_count: number;
+-  occupied: number;
+-};
+-
+-async function getTournamentCounts(
+-  connection: import("mysql2/promise").PoolConnection,
+-  tournamentId: string
+-) {
+-  const [rows] = await connection.query<CountRow[]>(`
+-    SELECT
+-      (SELECT COUNT(*) FROM registrations WHERE tournament_id=? AND deleted_at IS NULL) AS registration_count,
+-      (SELECT COUNT(*) FROM tournament_matches WHERE tournament_id=?) AS match_count,
+-      (SELECT COUNT(*) FROM registration_holds WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()) AS hold_count,
+-      (SELECT COUNT(*) FROM waitlist_entries WHERE tournament_id=? AND status IN ('WAITING','OFFERED')) AS waitlist_count,
+-      (
+-        SELECT COALESCE(SUM(
+-          CASE
+-            WHEN status IN ('RESERVED','PENDING_APPROVAL','CONFIRMED','CHECKED_IN') THEN slots
+-            WHEN status='PENDING_PAYMENT' AND (reserved_until IS NULL OR reserved_until>NOW()) THEN slots
+-            WHEN status='NEEDS_CORRECTION' AND correction_expires_at>NOW() THEN slots
+-            ELSE 0
+-          END
+-        ),0)
+-        FROM registrations
+-        WHERE tournament_id=? AND deleted_at IS NULL
+-      )
+-      +
+-      (
+-        SELECT COALESCE(SUM(slots),0)
+-        FROM registration_holds
+-        WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()
+-      )
+-      +
+-      (
+-        SELECT COALESCE(SUM(slots),0)
+-        FROM waitlist_entries
+-        WHERE tournament_id=? AND status='OFFERED' AND offer_expires_at>NOW()
+-      ) AS occupied
+-  `, [
+-    tournamentId,
+-    tournamentId,
+-    tournamentId,
+-    tournamentId,
+-    tournamentId,
+-    tournamentId,
+-    tournamentId
+-  ]);
+-  return rows[0];
+-}
+-
+-export async function GET(
+-  _request: Request,
+-  { params }: { params: Promise<{ id: string }> }
+-) {
+-  const auth = await authorize("tournaments.view");
+-  if (auth.response) return auth.response;
+-
+-  const { id } = await params;
+-  const rows = await queryRows<RowDataPacket[]>(`
+-    SELECT * FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1
+-  `, [id]);
+-  if (!rows[0]) {
+-    return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
+-  }
+-  return NextResponse.json({ item: rows[0] });
+-}
+-
+-export async function PATCH(
+-  request: Request,
+-  { params }: { params: Promise<{ id: string }> }
+-) {
+-  const auth = await authorize("tournaments.manage");
+-  if (auth.response) return auth.response;
+-
+-  try {
+-    const input = tournamentInputSchema.parse(await request.json());
+-    const { id } = await params;
+-    const connection = await db.getConnection();
+-    let old: TournamentRow | null = null;
+-
+-    try {
+-      await connection.beginTransaction();
+-      const [rows] = await connection.query<TournamentRow[]>(`
+-        SELECT id,slug,title,status,capacity,game_id,participant_type,team_size,format,template_id
+-        FROM tournaments
+-        WHERE id=? AND deleted_at IS NULL
+-        LIMIT 1
+-        FOR UPDATE
+-      `, [id]);
+-      old = rows[0] || null;
+-
+-      if (!old) {
+-        await connection.rollback();
+-        return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
+-      }
+-
+-      const counts = await getTournamentCounts(connection, id);
+-      const structuralChanged = Number(old.game_id) !== input.gameId
+-        || old.participant_type !== input.participantType
+-        || Number(old.team_size) !== input.teamSize
+-        || old.format !== input.format;
+-
+-      if (
+-        structuralChanged
+-        && (
+-          Number(counts.registration_count) > 0
+-          || Number(counts.match_count) > 0
+-          || Number(counts.hold_count) > 0
+-          || Number(counts.waitlist_count) > 0
+-        )
+-      ) {
+-        await connection.rollback();
+-        return NextResponse.json({
+-          message: "پس از ایجاد ثبت‌نام، رزرو، صف انتظار یا بازی، ساختار مسابقه قابل تغییر نیست."
+-        }, { status: 409 });
+-      }
+-
+-      if (input.capacity < Number(counts.occupied)) {
+-        await connection.rollback();
+-        return NextResponse.json({
+-          message: `ظرفیت نمی‌تواند کمتر از ظرفیت اشغال‌شده (${Number(counts.occupied).toLocaleString("fa-IR")}) باشد.`
+-        }, { status: 409 });
+-      }
+-
+-      if (input.status === "DRAFT" && (
+-        Number(counts.registration_count) > 0
+-        || Number(counts.hold_count) > 0
+-        || Number(counts.waitlist_count) > 0
+-      )) {
+-        await connection.rollback();
+-        return NextResponse.json({
+-          message: "مسابقه دارای ثبت‌نام، رزرو یا صف انتظار را نمی‌توان به پیش‌نویس بازگرداند."
+-        }, { status: 409 });
+-      }
+-
+-      if (input.templateId) {
+-        const [templates] = await connection.query<RowDataPacket[]>(`
+-          SELECT id
+-          FROM tournament_templates
+-          WHERE id=? AND is_active=1
+-          LIMIT 1
+-        `, [input.templateId]);
+-        if (!templates[0]) {
+-          await connection.rollback();
+-          return NextResponse.json({ message: "قالب انتخاب‌شده فعال نیست." }, { status: 422 });
+-        }
+-      }
+-
+-      await connection.execute(`
+-        UPDATE tournaments SET
+-          slug=?,title=?,subtitle=?,description=?,game_id=?,template_id=?,venue_id=?,
+-          format=?,participant_type=?,team_size=?,capacity=?,min_participants=?,price=?,status=?,
+-          registration_starts_at=?,registration_ends_at=?,starts_at=?,ends_at=?,
+-          reservation_expires_min=?,late_tolerance_min=?,waitlist_mode=?,allow_multi_slot=?,
+-          has_third_place=?,draw_mode=?,rules=?,game_settings=?,scoring_settings=?,
+-          notification_settings=?,cancellation_settings=?,prize_settings=?,cover_image_url=?,
+-          is_featured=?,
+-          published_at=IF(? IN ('PUBLISHED','REGISTRATION_OPEN') AND published_at IS NULL,NOW(),published_at),
+-          updated_at=NOW()
+-        WHERE id=?
+-      `, [
+-        input.slug,
+-        input.title,
+-        input.subtitle || null,
+-        input.description || null,
+-        input.gameId,
+-        input.templateId || null,
+-        input.venueId || null,
+-        input.format,
+-        input.participantType,
+-        input.teamSize,
+-        input.capacity,
+-        input.minParticipants,
+-        input.price,
+-        input.status,
+-        input.registrationStartsAt ? new Date(input.registrationStartsAt) : null,
+-        input.registrationEndsAt ? new Date(input.registrationEndsAt) : null,
+-        new Date(input.startsAt),
+-        input.endsAt ? new Date(input.endsAt) : null,
+-        input.reservationExpiresMin,
+-        input.lateToleranceMin,
+-        input.waitlistMode,
+-        input.allowMultiSlot ? 1 : 0,
+-        input.hasThirdPlace ? 1 : 0,
+-        input.drawMode,
+-        JSON.stringify(input.rules),
+-        JSON.stringify(input.gameSettings),
+-        JSON.stringify(input.scoringSettings),
+-        JSON.stringify(input.notificationSettings),
+-        JSON.stringify(input.cancellationSettings),
+-        JSON.stringify(input.prizeSettings),
+-        input.coverImageUrl || null,
+-        input.isFeatured ? 1 : 0,
+-        input.status,
+-        id
+-      ]);
+-
+-      await connection.commit();
+-    } catch (error) {
+-      await connection.rollback();
+-      throw error;
+-    } finally {
+-      connection.release();
+-    }
+-
+-    await writeAuditLog({
+-      actorUserId: auth.user.id,
+-      action: "tournament.updated",
+-      entityType: "tournament",
+-      entityId: id,
+-      oldData: old,
+-      newData: input,
+-      request
+-    });
+-    return NextResponse.json({ ok: true, slug: input.slug });
+-  } catch (error) {
+-    if (error instanceof z.ZodError) {
+-      return NextResponse.json({
+-        message: "اطلاعات ویرایش نامعتبر است.",
+-        errors: error.issues
+-      }, { status: 422 });
+-    }
+-    if (error instanceof Error && /Duplicate entry/.test(error.message)) {
+-      return NextResponse.json({ message: "این آدرس مسابقه قبلاً استفاده شده است." }, { status: 409 });
+-    }
+-    console.error("tournament.update.failed", error);
+-    return NextResponse.json({ message: "ویرایش مسابقه انجام نشد." }, { status: 500 });
+-  }
+-}
+-
+-export async function DELETE(
+-  request: Request,
+-  { params }: { params: Promise<{ id: string }> }
+-) {
+-  const auth = await authorize("tournaments.manage");
+-  if (auth.response) return auth.response;
+-
+-  const { id } = await params;
+-  const connection = await db.getConnection();
+-  try {
+-    await connection.beginTransaction();
+-    const [rows] = await connection.query<RowDataPacket[]>(`
+-      SELECT id FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1 FOR UPDATE
+-    `, [id]);
+-    if (!rows[0]) {
+-      await connection.rollback();
+-      return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
+-    }
+-
+-    const counts = await getTournamentCounts(connection, id);
+-    if (
+-      Number(counts.registration_count) > 0
+-      || Number(counts.match_count) > 0
+-      || Number(counts.hold_count) > 0
+-      || Number(counts.waitlist_count) > 0
+-    ) {
+-      await connection.rollback();
+-      return NextResponse.json({
+-        message: "مسابقه دارای ثبت‌نام، رزرو، صف انتظار یا بازی قابل حذف نیست؛ وضعیت آن را لغوشده کنید."
+-      }, { status: 409 });
+-    }
+-
+-    await connection.execute(`
+-      UPDATE tournaments SET deleted_at=NOW(),updated_at=NOW() WHERE id=?
+-    `, [id]);
+-    await connection.commit();
+-
+-    await writeAuditLog({
+-      actorUserId: auth.user.id,
+-      action: "tournament.deleted",
+-      entityType: "tournament",
+-      entityId: id,
+-      request
+-    });
+-    return NextResponse.json({ ok: true });
+-  } catch (error) {
+-    await connection.rollback();
+-    console.error("tournament.delete.failed", error);
+-    return NextResponse.json({ message: "حذف مسابقه انجام نشد." }, { status: 500 });
+-  } finally {
+-    connection.release();
+-  }
+-}
++import { NextResponse } from "next/server";
++import type { RowDataPacket } from "mysql2";
++import { z } from "zod";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import { db, queryRows } from "@/lib/db";
++import {
++  canChangeTournamentStatus,
++  openRegistrationStatusError,
++  type TournamentStatus
++} from "@/lib/tournament-definition";
++import { tournamentInputSchema } from "@/lib/tournament-input";
++
++type TournamentRow = RowDataPacket & {
++  id: number;
++  slug: string;
++  title: string;
++  status: TournamentStatus;
++  capacity: number;
++  game_id: number;
++  venue_id: number | null;
++  participant_type: string;
++  team_size: number;
++  format: string;
++  draw_mode: string;
++  has_third_place: number;
++  starts_at: Date;
++  template_id: number | null;
++};
++
++type CountRow = RowDataPacket & {
++  registration_count: number;
++  active_registration_count: number;
++  match_count: number;
++  hold_count: number;
++  waitlist_count: number;
++  occupied: number;
++};
++
++async function getTournamentCounts(
++  connection: import("mysql2/promise").PoolConnection,
++  tournamentId: string
++) {
++  const [rows] = await connection.query<CountRow[]>(`
++    SELECT
++      (SELECT COUNT(*) FROM registrations WHERE tournament_id=? AND deleted_at IS NULL) AS registration_count,
++      (
++        SELECT COUNT(*)
++        FROM registrations
++        WHERE tournament_id=?
++          AND deleted_at IS NULL
++          AND status NOT IN ('CANCELLED','REJECTED','EXPIRED','NO_SHOW')
++      ) AS active_registration_count,
++      (SELECT COUNT(*) FROM tournament_matches WHERE tournament_id=?) AS match_count,
++      (
++        SELECT COUNT(*)
++        FROM registration_holds
++        WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()
++      ) AS hold_count,
++      (
++        SELECT COUNT(*)
++        FROM waitlist_entries
++        WHERE tournament_id=? AND status IN ('WAITING','OFFERED')
++      ) AS waitlist_count,
++      (
++        SELECT COALESCE(SUM(
++          CASE
++            WHEN status IN ('RESERVED','PENDING_APPROVAL','CONFIRMED','CHECKED_IN') THEN slots
++            WHEN status='PENDING_PAYMENT' AND (reserved_until IS NULL OR reserved_until>NOW()) THEN slots
++            WHEN status='NEEDS_CORRECTION' AND correction_expires_at>NOW() THEN slots
++            ELSE 0
++          END
++        ),0)
++        FROM registrations
++        WHERE tournament_id=? AND deleted_at IS NULL
++      )
++      +
++      (
++        SELECT COALESCE(SUM(slots),0)
++        FROM registration_holds
++        WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()
++      )
++      +
++      (
++        SELECT COALESCE(SUM(slots),0)
++        FROM waitlist_entries
++        WHERE tournament_id=? AND status='OFFERED' AND offer_expires_at>NOW()
++      ) AS occupied
++  `, [
++    tournamentId,
++    tournamentId,
++    tournamentId,
++    tournamentId,
++    tournamentId,
++    tournamentId,
++    tournamentId,
++    tournamentId
++  ]);
++  return rows[0];
++}
++
++export async function GET(
++  _request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.view");
++  if (auth.response) return auth.response;
++
++  const { id } = await params;
++  const rows = await queryRows<RowDataPacket[]>(`
++    SELECT * FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1
++  `, [id]);
++  if (!rows[0]) {
++    return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++  }
++  return NextResponse.json({ item: rows[0] });
++}
++
++export async function PATCH(
++  request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  try {
++    const input = tournamentInputSchema.parse(await request.json());
++    const { id } = await params;
++    const connection = await db.getConnection();
++    let old: TournamentRow | null = null;
++
++    try {
++      await connection.beginTransaction();
++      const [rows] = await connection.query<TournamentRow[]>(`
++        SELECT
++          id,slug,title,status,capacity,game_id,venue_id,participant_type,team_size,
++          format,draw_mode,has_third_place,starts_at,template_id
++        FROM tournaments
++        WHERE id=? AND deleted_at IS NULL
++        LIMIT 1
++        FOR UPDATE
++      `, [id]);
++      old = rows[0] || null;
++
++      if (!old) {
++        await connection.rollback();
++        return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++      }
++
++      const counts = await getTournamentCounts(connection, id);
++
++      if (!canChangeTournamentStatus(old.status, input.status)) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "این تغییر وضعیت از مرحله فعلی مسابقه مجاز نیست. مراحل قرعه، شروع و پایان مسابقه توسط خود سیستم مدیریت می‌شوند."
++        }, { status: 409 });
++      }
++
++      if (old.status !== input.status && input.status === "REGISTRATION_OPEN") {
++        if (Number(counts.match_count) > 0) {
++          await connection.rollback();
++          return NextResponse.json({
++            message: "پس از ساخت قرعه یا بازی‌ها، ثبت‌نام دوباره باز نمی‌شود."
++          }, { status: 409 });
++        }
++        const statusError = openRegistrationStatusError(input);
++        if (statusError) {
++          await connection.rollback();
++          return NextResponse.json({ message: statusError }, { status: 422 });
++        }
++      }
++
++      const registrationStructureChanged = Number(old.game_id) !== input.gameId
++        || old.participant_type !== input.participantType
++        || Number(old.team_size) !== input.teamSize
++        || old.format !== input.format;
++
++      if (
++        registrationStructureChanged
++        && (
++          Number(counts.registration_count) > 0
++          || Number(counts.match_count) > 0
++          || Number(counts.hold_count) > 0
++          || Number(counts.waitlist_count) > 0
++        )
++      ) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "پس از ایجاد ثبت‌نام، رزرو، صف انتظار یا بازی، بازی، فرمت و نوع شرکت‌کننده قابل تغییر نیستند."
++        }, { status: 409 });
++      }
++
++      const drawSettingsChanged = old.draw_mode !== input.drawMode
++        || Boolean(old.has_third_place) !== input.hasThirdPlace;
++      if (drawSettingsChanged && Number(counts.match_count) > 0) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "پس از ساخت قرعه، نوع قرعه و مسابقه رده‌بندی قابل تغییر نیستند."
++        }, { status: 409 });
++      }
++
++      const scheduleChanged = Number(old.venue_id || 0) !== Number(input.venueId || 0)
++        || new Date(old.starts_at).getTime() !== new Date(input.startsAt).getTime();
++      if (scheduleChanged && Number(counts.match_count) > 0) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "پس از ساخت بازی‌ها، محل و زمان شروع مسابقه را از بخش زمان‌بندی مدیریت کنید."
++        }, { status: 409 });
++      }
++
++      if (input.capacity < Number(counts.occupied)) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: `ظرفیت نمی‌تواند کمتر از ظرفیت اشغال‌شده (${Number(counts.occupied).toLocaleString("fa-IR")}) باشد.`
++        }, { status: 409 });
++      }
++
++      if (input.status === "DRAFT" && (
++        Number(counts.registration_count) > 0
++        || Number(counts.hold_count) > 0
++        || Number(counts.waitlist_count) > 0
++      )) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "مسابقه دارای ثبت‌نام، رزرو یا صف انتظار را نمی‌توان به پیش‌نویس بازگرداند."
++        }, { status: 409 });
++      }
++
++      if (old.status !== "CANCELLED" && input.status === "CANCELLED" && (
++        Number(counts.active_registration_count) > 0
++        || Number(counts.match_count) > 0
++        || Number(counts.hold_count) > 0
++        || Number(counts.waitlist_count) > 0
++      )) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "این مسابقه داده فعال دارد و نباید فقط با تغییر وضعیت لغو شود. ابتدا ثبت‌نام‌ها و بازی‌های مرتبط باید تعیین تکلیف شوند."
++        }, { status: 409 });
++      }
++
++      const [games] = await connection.query<RowDataPacket[]>(`
++        SELECT id FROM games WHERE id=? AND is_active=1 LIMIT 1
++      `, [input.gameId]);
++      if (!games[0]) {
++        await connection.rollback();
++        return NextResponse.json({ message: "بازی انتخاب‌شده فعال نیست." }, { status: 422 });
++      }
++
++      if (input.venueId) {
++        const [venues] = await connection.query<RowDataPacket[]>(`
++          SELECT id FROM venues WHERE id=? AND is_active=1 LIMIT 1
++        `, [input.venueId]);
++        if (!venues[0]) {
++          await connection.rollback();
++          return NextResponse.json({ message: "محل انتخاب‌شده فعال نیست." }, { status: 422 });
++        }
++      }
++
++      if (input.templateId) {
++        const [templates] = await connection.query<RowDataPacket[]>(`
++          SELECT id
++          FROM tournament_templates
++          WHERE id=? AND is_active=1
++          LIMIT 1
++        `, [input.templateId]);
++        if (!templates[0]) {
++          await connection.rollback();
++          return NextResponse.json({ message: "قالب انتخاب‌شده فعال نیست." }, { status: 422 });
++        }
++      }
++
++      await connection.execute(`
++        UPDATE tournaments SET
++          slug=?,title=?,subtitle=?,description=?,game_id=?,template_id=?,venue_id=?,
++          format=?,participant_type=?,team_size=?,capacity=?,min_participants=?,price=?,status=?,
++          registration_starts_at=?,registration_ends_at=?,starts_at=?,ends_at=?,
++          reservation_expires_min=?,late_tolerance_min=?,waitlist_mode=?,allow_multi_slot=?,
++          has_third_place=?,draw_mode=?,rules=?,game_settings=?,scoring_settings=?,
++          notification_settings=?,cancellation_settings=?,prize_settings=?,cover_image_url=?,
++          is_featured=?,
++          published_at=IF(? IN ('PUBLISHED','REGISTRATION_OPEN') AND published_at IS NULL,NOW(),published_at),
++          updated_at=NOW()
++        WHERE id=?
++      `, [
++        input.slug,
++        input.title,
++        input.subtitle || null,
++        input.description || null,
++        input.gameId,
++        input.templateId || null,
++        input.venueId || null,
++        input.format,
++        input.participantType,
++        input.teamSize,
++        input.capacity,
++        input.minParticipants,
++        input.price,
++        input.status,
++        input.registrationStartsAt ? new Date(input.registrationStartsAt) : null,
++        input.registrationEndsAt ? new Date(input.registrationEndsAt) : null,
++        new Date(input.startsAt),
++        input.endsAt ? new Date(input.endsAt) : null,
++        input.reservationExpiresMin,
++        input.lateToleranceMin,
++        input.waitlistMode,
++        input.allowMultiSlot ? 1 : 0,
++        input.hasThirdPlace ? 1 : 0,
++        input.drawMode,
++        JSON.stringify(input.rules),
++        JSON.stringify(input.gameSettings),
++        JSON.stringify(input.scoringSettings),
++        JSON.stringify(input.notificationSettings),
++        JSON.stringify(input.cancellationSettings),
++        JSON.stringify(input.prizeSettings),
++        input.coverImageUrl || null,
++        input.isFeatured ? 1 : 0,
++        input.status,
++        id
++      ]);
++
++      await connection.commit();
++    } catch (error) {
++      await connection.rollback();
++      throw error;
++    } finally {
++      connection.release();
++    }
++
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: "tournament.updated",
++      entityType: "tournament",
++      entityId: id,
++      oldData: old,
++      newData: input,
++      request
++    });
++    return NextResponse.json({ ok: true, slug: input.slug });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({
++        message: "اطلاعات ویرایش نامعتبر است.",
++        errors: error.issues
++      }, { status: 422 });
++    }
++    if (error instanceof Error && /Duplicate entry/.test(error.message)) {
++      return NextResponse.json({ message: "این آدرس مسابقه قبلاً استفاده شده است." }, { status: 409 });
++    }
++    console.error("tournament.update.failed", error);
++    return NextResponse.json({ message: "ویرایش مسابقه انجام نشد." }, { status: 500 });
++  }
++}
++
++export async function DELETE(
++  request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  const { id } = await params;
++  const connection = await db.getConnection();
++  try {
++    await connection.beginTransaction();
++    const [rows] = await connection.query<RowDataPacket[]>(`
++      SELECT id FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1 FOR UPDATE
++    `, [id]);
++    if (!rows[0]) {
++      await connection.rollback();
++      return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++    }
++
++    const counts = await getTournamentCounts(connection, id);
++    if (
++      Number(counts.registration_count) > 0
++      || Number(counts.match_count) > 0
++      || Number(counts.hold_count) > 0
++      || Number(counts.waitlist_count) > 0
++    ) {
++      await connection.rollback();
++      return NextResponse.json({
++        message: "مسابقه دارای ثبت‌نام، رزرو، صف انتظار یا بازی قابل حذف نیست."
++      }, { status: 409 });
++    }
++
++    await connection.execute(`
++      UPDATE tournaments SET deleted_at=NOW(),updated_at=NOW() WHERE id=?
++    `, [id]);
++    await connection.commit();
++
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: "tournament.deleted",
++      entityType: "tournament",
++      entityId: id,
++      request
++    });
++    return NextResponse.json({ ok: true });
++  } catch (error) {
++    await connection.rollback();
++    console.error("tournament.delete.failed", error);
++    return NextResponse.json({ message: "حذف مسابقه انجام نشد." }, { status: 500 });
++  } finally {
++    connection.release();
++  }
++}
+diff --git a/src/app/api/tournaments/route.ts b/src/app/api/tournaments/route.ts
+index e1c9bd1..9f3f30e 100644
+--- a/src/app/api/tournaments/route.ts
++++ b/src/app/api/tournaments/route.ts
+@@ -1,10 +1,160 @@
+-import { NextResponse } from "next/server";
+-import { authorize } from "@/lib/authorization";
+-import { writeAuditLog } from "@/lib/audit";
+-import { db } from "@/lib/db";
+-import { listTournaments } from "@/lib/repositories/tournaments";
+-import { tournamentInputSchema } from "@/lib/tournament-input";
+-import { z } from "zod";
+-import type { RowDataPacket } from "mysql2";
+-export async function GET(){return NextResponse.json({items:await listTournaments(false)});}
+-export async function POST(request:Request){const auth=await authorize("tournaments.manage");if(auth.response)return auth.response;try{const input=tournamentInputSchema.parse(await request.json());const connection=await db.getConnection();let id=0;try{await connection.beginTransaction();if(input.templateId){const [templates]=await connection.query<RowDataPacket[]>(`SELECT id FROM tournament_templates WHERE id=? AND is_active=1 LIMIT 1 FOR UPDATE`,[input.templateId]);if(!templates[0]){await connection.rollback();return NextResponse.json({message:"قالب انتخاب‌شده فعال نیست."},{status:422});}}const [result]=await connection.execute<import("mysql2").ResultSetHeader>(`INSERT INTO tournaments(public_id,slug,title,subtitle,description,game_id,template_id,venue_id,format,participant_type,team_size,capacity,min_participants,price,currency,status,registration_starts_at,registration_ends_at,starts_at,ends_at,reservation_expires_min,late_tolerance_min,waitlist_mode,allow_multi_slot,has_third_place,draw_mode,rules,game_settings,scoring_settings,notification_settings,cancellation_settings,prize_settings,cover_image_url,is_featured,published_at,created_at,updated_at) VALUES(UUID(),?,?,?,?,?,?,?,?,?,?,?,?,?,'TOMAN',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,IF(? IN ('PUBLISHED','REGISTRATION_OPEN'),NOW(),NULL),NOW(),NOW())`,[input.slug,input.title,input.subtitle||null,input.description||null,input.gameId,input.templateId||null,input.venueId||null,input.format,input.participantType,input.teamSize,input.capacity,input.minParticipants,input.price,input.status,input.registrationStartsAt?new Date(input.registrationStartsAt):null,input.registrationEndsAt?new Date(input.registrationEndsAt):null,new Date(input.startsAt),input.endsAt?new Date(input.endsAt):null,input.reservationExpiresMin,input.lateToleranceMin,input.waitlistMode,input.allowMultiSlot?1:0,input.hasThirdPlace?1:0,input.drawMode,JSON.stringify(input.rules),JSON.stringify(input.gameSettings),JSON.stringify(input.scoringSettings),JSON.stringify(input.notificationSettings),JSON.stringify(input.cancellationSettings),JSON.stringify(input.prizeSettings),input.coverImageUrl||null,input.isFeatured?1:0,input.status]);id=result.insertId;await connection.commit();}catch(error){await connection.rollback();throw error;}finally{connection.release();}await writeAuditLog({actorUserId:auth.user.id,action:"tournament.created",entityType:"tournament",entityId:id,newData:input,request});return NextResponse.json({ok:true,id:String(id),slug:input.slug},{status:201});}catch(error){if(error instanceof z.ZodError)return NextResponse.json({message:"داده مسابقه نامعتبر است.",errors:error.issues},{status:422});if(error instanceof Error&&/uq_tournaments_slug|Duplicate entry/.test(error.message))return NextResponse.json({message:"این آدرس مسابقه قبلاً استفاده شده است."},{status:409});console.error(error);return NextResponse.json({message:"ثبت مسابقه انجام نشد."},{status:500});}}
++import { NextResponse } from "next/server";
++import type { ResultSetHeader, RowDataPacket } from "mysql2";
++import { z } from "zod";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import { db } from "@/lib/db";
++import { listTournaments } from "@/lib/repositories/tournaments";
++import { openRegistrationStatusError } from "@/lib/tournament-definition";
++import { tournamentInputSchema } from "@/lib/tournament-input";
++
++export async function GET() {
++  return NextResponse.json({ items: await listTournaments(false) });
++}
++
++export async function POST(request: Request) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  try {
++    const input = tournamentInputSchema.parse(await request.json());
++
++    if (!["DRAFT", "PUBLISHED", "REGISTRATION_OPEN"].includes(input.status)) {
++      return NextResponse.json({
++        message: "مسابقه جدید فقط می‌تواند پیش‌نویس، منتشرشده یا دارای ثبت‌نام باز باشد."
++      }, { status: 422 });
++    }
++
++    if (new Date(input.startsAt).getTime() <= Date.now()) {
++      return NextResponse.json({
++        message: "زمان شروع مسابقه جدید باید در آینده باشد."
++      }, { status: 422 });
++    }
++
++    if (input.status === "REGISTRATION_OPEN") {
++      const statusError = openRegistrationStatusError(input);
++      if (statusError) {
++        return NextResponse.json({ message: statusError }, { status: 422 });
++      }
++    }
++
++    const connection = await db.getConnection();
++    let id = 0;
++
++    try {
++      await connection.beginTransaction();
++
++      const [games] = await connection.query<RowDataPacket[]>(`
++        SELECT id FROM games WHERE id=? AND is_active=1 LIMIT 1
++      `, [input.gameId]);
++      if (!games[0]) {
++        await connection.rollback();
++        return NextResponse.json({ message: "بازی انتخاب‌شده فعال نیست." }, { status: 422 });
++      }
++
++      if (input.venueId) {
++        const [venues] = await connection.query<RowDataPacket[]>(`
++          SELECT id FROM venues WHERE id=? AND is_active=1 LIMIT 1
++        `, [input.venueId]);
++        if (!venues[0]) {
++          await connection.rollback();
++          return NextResponse.json({ message: "محل انتخاب‌شده فعال نیست." }, { status: 422 });
++        }
++      }
++
++      if (input.templateId) {
++        const [templates] = await connection.query<RowDataPacket[]>(`
++          SELECT id
++          FROM tournament_templates
++          WHERE id=? AND is_active=1
++          LIMIT 1
++          FOR UPDATE
++        `, [input.templateId]);
++        if (!templates[0]) {
++          await connection.rollback();
++          return NextResponse.json({ message: "قالب انتخاب‌شده فعال نیست." }, { status: 422 });
++        }
++      }
++
++      const [result] = await connection.execute<ResultSetHeader>(`
++        INSERT INTO tournaments(
++          public_id,slug,title,subtitle,description,game_id,template_id,venue_id,
++          format,participant_type,team_size,capacity,min_participants,price,currency,status,
++          registration_starts_at,registration_ends_at,starts_at,ends_at,
++          reservation_expires_min,late_tolerance_min,waitlist_mode,allow_multi_slot,
++          has_third_place,draw_mode,rules,game_settings,scoring_settings,
++          notification_settings,cancellation_settings,prize_settings,cover_image_url,
++          is_featured,published_at,created_at,updated_at
++        ) VALUES(
++          UUID(),?,?,?,?,?,?,?,?,?,?,?,?,?,'TOMAN',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
++          IF(? IN ('PUBLISHED','REGISTRATION_OPEN'),NOW(),NULL),NOW(),NOW()
++        )
++      `, [
++        input.slug,
++        input.title,
++        input.subtitle || null,
++        input.description || null,
++        input.gameId,
++        input.templateId || null,
++        input.venueId || null,
++        input.format,
++        input.participantType,
++        input.teamSize,
++        input.capacity,
++        input.minParticipants,
++        input.price,
++        input.status,
++        input.registrationStartsAt ? new Date(input.registrationStartsAt) : null,
++        input.registrationEndsAt ? new Date(input.registrationEndsAt) : null,
++        new Date(input.startsAt),
++        input.endsAt ? new Date(input.endsAt) : null,
++        input.reservationExpiresMin,
++        input.lateToleranceMin,
++        input.waitlistMode,
++        input.allowMultiSlot ? 1 : 0,
++        input.hasThirdPlace ? 1 : 0,
++        input.drawMode,
++        JSON.stringify(input.rules),
++        JSON.stringify(input.gameSettings),
++        JSON.stringify(input.scoringSettings),
++        JSON.stringify(input.notificationSettings),
++        JSON.stringify(input.cancellationSettings),
++        JSON.stringify(input.prizeSettings),
++        input.coverImageUrl || null,
++        input.isFeatured ? 1 : 0,
++        input.status
++      ]);
++
++      id = result.insertId;
++      await connection.commit();
++    } catch (error) {
++      await connection.rollback();
++      throw error;
++    } finally {
++      connection.release();
++    }
++
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: "tournament.created",
++      entityType: "tournament",
++      entityId: id,
++      newData: input,
++      request
++    });
++
++    return NextResponse.json({ ok: true, id: String(id), slug: input.slug }, { status: 201 });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({
++        message: "داده مسابقه نامعتبر است.",
++        errors: error.issues
++      }, { status: 422 });
++    }
++    if (error instanceof Error && /uq_tournaments_slug|Duplicate entry/.test(error.message)) {
++      return NextResponse.json({ message: "این آدرس مسابقه قبلاً استفاده شده است." }, { status: 409 });
++    }
++    console.error("tournament.create.failed", error);
++    return NextResponse.json({ message: "ثبت مسابقه انجام نشد." }, { status: 500 });
++  }
++}
+diff --git a/src/components/admin/tournament-builder.tsx b/src/components/admin/tournament-builder.tsx
+index fa3e65b..dc7fc75 100644
+--- a/src/components/admin/tournament-builder.tsx
++++ b/src/components/admin/tournament-builder.tsx
+@@ -7,74 +7,119 @@ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+ import { Input } from "@/components/ui/input";
+ import { PersianDatePicker } from "@/components/ui/persian-date-picker";
+-import { Label } from "@/components/ui/label";
++import { FieldHint, Label } from "@/components/ui/label";
+ import { SelectField } from "@/components/ui/select";
+ import { Switch } from "@/components/ui/switch";
+ import { Textarea } from "@/components/ui/textarea";
++import { TOURNAMENT_FORMATS, openRegistrationStatusError } from "@/lib/tournament-definition";
++
++const steps = ["اطلاعات پایه", "ساختار مسابقه", "پرداخت و ظرفیت", "زمان و قوانین", "انتشار"];
+ 
+-const steps = ["اطلاعات پایه", "فرمت و ظرفیت", "پرداخت", "قوانین و زمان", "انتشار"];
+ type Option = { id: number; title: string };
+-type TemplateItem = { id: number | string; game_id: number; title: string; configuration: Record<string, unknown> | string };
++type TemplateItem = {
++  id: number | string;
++  game_id: number;
++  title: string;
++  configuration: Record<string, unknown> | string;
++};
+ 
+ type FormState = {
+   title: string;
+   slug: string;
++  subtitle: string;
+   description: string;
+   gameId: number;
+   templateId: number | null;
+   venueId: number | null;
+-  format: string;
++  format: (typeof TOURNAMENT_FORMATS)[number];
+   participantType: "INDIVIDUAL" | "TEAM";
+   teamSize: number;
+   capacity: number;
++  minParticipants: number;
+   price: number;
+   reservationExpiresMin: number;
++  registrationStartsAt: string;
++  registrationEndsAt: string;
+   startsAt: string;
++  endsAt: string;
+   lateToleranceMin: number;
+-  waitlistMode: "offer" | "manual" | "automatic";
++  waitlistMode: "disabled" | "offer" | "manual" | "automatic";
+   allowMultiSlot: boolean;
+   hasThirdPlace: boolean;
+   drawMode: "random" | "seeded" | "custom";
+   rulesText: string;
++  coverImageUrl: string;
++  isFeatured: boolean;
+   status: "DRAFT" | "PUBLISHED" | "REGISTRATION_OPEN";
+ };
+ 
+-function defaultStartDate() {
+-  const date = new Date(Date.now() + 24 * 60 * 60 * 1000);
+-  date.setSeconds(0, 0);
+-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
++function localValue(date: Date) {
++  return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
++    .toISOString()
++    .slice(0, 16);
+ }
+ 
+-const initialForm: FormState = {
+-  title: "",
+-  slug: `tournament-${Date.now()}`,
+-  description: "",
+-  gameId: 1,
+-  templateId: null,
+-  venueId: 1,
+-  format: "حذفی تک‌بازی",
+-  participantType: "INDIVIDUAL",
+-  teamSize: 1,
+-  capacity: 32,
+-  price: 350000,
+-  reservationExpiresMin: 30,
+-  startsAt: defaultStartDate(),
+-  lateToleranceMin: 10,
+-  waitlistMode: "offer",
+-  allowMultiSlot: true,
+-  hasThirdPlace: false,
+-  drawMode: "random",
+-  rulesText: "",
+-  status: "DRAFT"
+-};
++function createInitialForm(): FormState {
++  const now = new Date();
++  now.setSeconds(0, 0);
++  const tournamentStart = new Date(now.getTime() + 24 * 60 * 60 * 1000);
++  const registrationEnd = new Date(tournamentStart.getTime() - 2 * 60 * 60 * 1000);
++  const tournamentEnd = new Date(tournamentStart.getTime() + 4 * 60 * 60 * 1000);
++
++  return {
++    title: "",
++    slug: `tournament-${Date.now()}`,
++    subtitle: "",
++    description: "",
++    gameId: 1,
++    templateId: null,
++    venueId: 1,
++    format: "حذفی تک‌بازی",
++    participantType: "INDIVIDUAL",
++    teamSize: 1,
++    capacity: 32,
++    minParticipants: 2,
++    price: 350000,
++    reservationExpiresMin: 30,
++    registrationStartsAt: localValue(now),
++    registrationEndsAt: localValue(registrationEnd),
++    startsAt: localValue(tournamentStart),
++    endsAt: localValue(tournamentEnd),
++    lateToleranceMin: 10,
++    waitlistMode: "offer",
++    allowMultiSlot: false,
++    hasThirdPlace: false,
++    drawMode: "random",
++    rulesText: "",
++    coverImageUrl: "",
++    isFeatured: false,
++    status: "DRAFT"
++  };
++}
++
++function readTemplateConfiguration(value: TemplateItem["configuration"]) {
++  if (typeof value !== "string") return value || {};
++  try {
++    const parsed = JSON.parse(value);
++    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
++      ? parsed as Record<string, unknown>
++      : {};
++  } catch {
++    return {};
++  }
++}
++
++function iso(value: string) {
++  return value ? new Date(value).toISOString() : null;
++}
+ 
+ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: number }) {
+   const [step, setStep] = useState(0);
+-  const [form, setForm] = useState<FormState>(initialForm);
++  const [form, setForm] = useState<FormState>(() => createInitialForm());
+   const [games, setGames] = useState<Option[]>([]);
+   const [venues, setVenues] = useState<Option[]>([]);
+   const [templates, setTemplates] = useState<TemplateItem[]>([]);
+-  const [saveAsTemplate, setSaveAsTemplate] = useState(true);
++  const [saveAsTemplate, setSaveAsTemplate] = useState(false);
+   const [saving, setSaving] = useState(false);
+   const [savedSlug, setSavedSlug] = useState("");
+   const [error, setError] = useState("");
+@@ -84,53 +129,27 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
+       fetch("/api/admin/tournament-options", { cache: "no-store" }).then((response) => response.json()),
+       fetch("/api/admin/templates", { cache: "no-store" }).then((response) => response.json())
+     ]).then(([options, templatePayload]) => {
+-      const loadedGames = options.games || [];
+-      const loadedVenues = options.venues || [];
++      const loadedGames: Option[] = options.games || [];
++      const loadedVenues: Option[] = options.venues || [];
+       const loadedTemplates: TemplateItem[] = templatePayload.items || [];
+       setGames(loadedGames);
+       setVenues(loadedVenues);
+       setTemplates(loadedTemplates);
+ 
+       setForm((current) => {
+-        const base = {
++        const base: FormState = {
+           ...current,
+-          gameId: loadedGames.some((game: Option) => game.id === current.gameId)
++          gameId: loadedGames.some((game) => game.id === current.gameId)
+             ? current.gameId
+             : Number(loadedGames[0]?.id || current.gameId),
+-          venueId: loadedVenues.some((venue: Option) => venue.id === current.venueId)
++          venueId: loadedVenues.some((venue) => venue.id === current.venueId)
+             ? current.venueId
+             : loadedVenues[0]?.id || null
+         };
+         const selected = initialTemplateId
+           ? loadedTemplates.find((item) => Number(item.id) === initialTemplateId)
+           : null;
+-        if (!selected) return base;
+-        const config = (typeof selected.configuration === "string"
+-          ? JSON.parse(selected.configuration)
+-          : selected.configuration) as Record<string, unknown>;
+-        return {
+-          ...base,
+-          templateId: Number(selected.id),
+-          gameId: Number(selected.game_id),
+-          format: String(config.format || base.format),
+-          capacity: Number(config.capacity || base.capacity),
+-          price: Number(config.price ?? base.price),
+-          reservationExpiresMin: Number(config.reservationExpiresMin ?? base.reservationExpiresMin),
+-          teamSize: Number(config.teamSize || base.teamSize),
+-          participantType: config.participantType === "TEAM" ? "TEAM" : "INDIVIDUAL",
+-          lateToleranceMin: Number(config.lateToleranceMin ?? base.lateToleranceMin),
+-          waitlistMode: ["offer","manual","automatic"].includes(String(config.waitlistMode))
+-            ? String(config.waitlistMode) as FormState["waitlistMode"]
+-            : base.waitlistMode,
+-          allowMultiSlot: typeof config.allowMultiSlot === "boolean" ? config.allowMultiSlot : base.allowMultiSlot,
+-          hasThirdPlace: typeof config.hasThirdPlace === "boolean" ? config.hasThirdPlace : base.hasThirdPlace,
+-          drawMode: ["random","seeded","custom"].includes(String(config.drawMode))
+-            ? String(config.drawMode) as FormState["drawMode"]
+-            : base.drawMode,
+-          rulesText: Array.isArray(config.rules)
+-            ? config.rules.filter((item: unknown): item is string => typeof item === "string").join("\n")
+-            : base.rulesText
+-        };
++        return selected ? applyTemplate(base, selected) : base;
+       });
+     }).catch(() => setError("دریافت تنظیمات اولیه انجام نشد."));
+   }, [initialTemplateId]);
+@@ -139,47 +158,109 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
+     setForm((current) => ({ ...current, [key]: value }));
+   }
+ 
++  function applyTemplate(current: FormState, selected: TemplateItem): FormState {
++    const config = readTemplateConfiguration(selected.configuration);
++    const format = TOURNAMENT_FORMATS.includes(config.format as FormState["format"])
++      ? config.format as FormState["format"]
++      : current.format;
++    const participantType = config.participantType === "TEAM" ? "TEAM" : "INDIVIDUAL";
++    const teamSize = participantType === "TEAM" ? Number(config.teamSize || 2) : 1;
++
++    return {
++      ...current,
++      templateId: Number(selected.id),
++      gameId: Number(selected.game_id),
++      format,
++      capacity: Number(config.capacity || current.capacity),
++      minParticipants: Number(config.minParticipants || current.minParticipants),
++      price: Number(config.price ?? current.price),
++      reservationExpiresMin: Number(config.reservationExpiresMin ?? current.reservationExpiresMin),
++      teamSize,
++      participantType,
++      lateToleranceMin: Number(config.lateToleranceMin ?? current.lateToleranceMin),
++      waitlistMode: ["disabled", "offer", "manual", "automatic"].includes(String(config.waitlistMode))
++        ? String(config.waitlistMode) as FormState["waitlistMode"]
++        : current.waitlistMode,
++      allowMultiSlot: typeof config.allowMultiSlot === "boolean" ? config.allowMultiSlot : current.allowMultiSlot,
++      hasThirdPlace: typeof config.hasThirdPlace === "boolean" ? config.hasThirdPlace : current.hasThirdPlace,
++      drawMode: ["random", "seeded", "custom"].includes(String(config.drawMode))
++        ? String(config.drawMode) as FormState["drawMode"]
++        : current.drawMode,
++      rulesText: Array.isArray(config.rules)
++        ? config.rules.filter((item): item is string => typeof item === "string").join("\n")
++        : current.rulesText
++    };
++  }
++
+   function selectTemplate(value: string) {
+     if (!value) {
+       update("templateId", null);
+       return;
+     }
+     const selected = templates.find((item) => String(item.id) === value);
+-    if (!selected) return;
+-    const config = (typeof selected.configuration === "string"
+-      ? JSON.parse(selected.configuration)
+-      : selected.configuration) as Record<string, unknown>;
+-    setForm((current) => ({
+-      ...current,
+-      templateId: Number(selected.id),
+-      gameId: Number(selected.game_id),
+-      format: String(config.format || current.format),
+-      capacity: Number(config.capacity || current.capacity),
+-      teamSize: Number(config.teamSize || current.teamSize),
+-      participantType: Number(config.teamSize || 1) > 1 ? "TEAM" : current.participantType,
+-      lateToleranceMin: Number(config.lateToleranceMin ?? current.lateToleranceMin),
+-      drawMode: ["random","seeded","custom"].includes(String(config.drawMode)) ? String(config.drawMode) as FormState["drawMode"] : current.drawMode
+-    }));
++    if (selected) setForm((current) => applyTemplate(current, selected));
+   }
+ 
++  const scheduleIsValid = useMemo(() => {
++    if (!form.startsAt) return false;
++    const start = new Date(form.startsAt).getTime();
++    const end = form.endsAt ? new Date(form.endsAt).getTime() : null;
++    const registrationStart = form.registrationStartsAt
++      ? new Date(form.registrationStartsAt).getTime()
++      : null;
++    const registrationEnd = form.registrationEndsAt
++      ? new Date(form.registrationEndsAt).getTime()
++      : null;
++    if (start <= Date.now()) return false;
++    if ((registrationStart === null) !== (registrationEnd === null)) return false;
++    if (registrationStart !== null && registrationEnd !== null) {
++      if (registrationStart >= registrationEnd || registrationEnd >= start) return false;
++    }
++    if (end !== null && end <= start) return false;
++    return true;
++  }, [form.endsAt, form.registrationEndsAt, form.registrationStartsAt, form.startsAt]);
++
+   const canNext = useMemo(() => {
+-    if (step === 0) return form.title.trim().length >= 3 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(form.slug);
+-    if (step === 1) return form.capacity >= 2 && (form.participantType === "INDIVIDUAL" || form.teamSize >= 2);
++    if (step === 0) {
++      return form.title.trim().length >= 3
++        && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(form.slug)
++        && form.gameId > 0;
++    }
++    if (step === 1) {
++      return form.capacity >= 2
++        && form.minParticipants >= 2
++        && form.minParticipants <= form.capacity
++        && (form.participantType === "INDIVIDUAL" || form.teamSize >= 2);
++    }
+     if (step === 2) return form.price >= 0 && form.reservationExpiresMin >= 5;
+-    if (step === 3) return Boolean(form.startsAt);
++    if (step === 3) return scheduleIsValid;
+     return true;
+-  }, [form, step]);
++  }, [form, scheduleIsValid, step]);
+ 
+   async function save() {
+     setSaving(true);
+     setError("");
+     setSavedSlug("");
++
+     try {
++      if (!scheduleIsValid) {
++        throw new Error("ترتیب تاریخ‌های ثبت‌نام و مسابقه را بررسی کنید.");
++      }
++      if (form.status === "REGISTRATION_OPEN") {
++        const statusError = openRegistrationStatusError({
++          registrationStartsAt: iso(form.registrationStartsAt),
++          registrationEndsAt: iso(form.registrationEndsAt),
++          startsAt: new Date(form.startsAt).toISOString()
++        });
++        if (statusError) throw new Error(statusError);
++      }
++
+       const rules = form.rulesText.split("\n").map((rule) => rule.trim()).filter(Boolean);
+       const payload = {
+         title: form.title,
+         slug: form.slug,
+-        description: form.description,
++        subtitle: form.subtitle || undefined,
++        description: form.description || undefined,
+         gameId: form.gameId,
+         templateId: form.templateId,
+         venueId: form.venueId,
+@@ -187,8 +268,12 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
+         participantType: form.participantType,
+         teamSize: form.participantType === "TEAM" ? form.teamSize : 1,
+         capacity: form.capacity,
++        minParticipants: form.minParticipants,
+         price: form.price,
++        registrationStartsAt: iso(form.registrationStartsAt),
++        registrationEndsAt: iso(form.registrationEndsAt),
+         startsAt: new Date(form.startsAt).toISOString(),
++        endsAt: iso(form.endsAt),
+         reservationExpiresMin: form.reservationExpiresMin,
+         lateToleranceMin: form.lateToleranceMin,
+         waitlistMode: form.waitlistMode,
+@@ -196,9 +281,21 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
+         hasThirdPlace: form.hasThirdPlace,
+         drawMode: form.drawMode,
+         rules,
++        gameSettings: {},
++        scoringSettings: {},
++        notificationSettings: {},
++        cancellationSettings: {},
++        prizeSettings: {},
++        coverImageUrl: form.coverImageUrl || null,
++        isFeatured: form.isFeatured,
+         status: form.status
+       };
+-      const response = await fetch("/api/tournaments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
++
++      const response = await fetch("/api/tournaments", {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(payload)
++      });
+       const result = await response.json();
+       if (!response.ok) throw new Error(result.message || "ذخیره مسابقه انجام نشد.");
+ 
+@@ -215,6 +312,7 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
+               participantType: form.participantType,
+               teamSize: form.participantType === "TEAM" ? form.teamSize : 1,
+               capacity: form.capacity,
++              minParticipants: form.minParticipants,
+               price: form.price,
+               reservationExpiresMin: form.reservationExpiresMin,
+               lateToleranceMin: form.lateToleranceMin,
+@@ -243,29 +341,48 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
+     <div className="mb-7 overflow-x-auto">
+       <div className="flex min-w-[680px] items-center">
+         {steps.map((label, index) => <div key={label} className="flex flex-1 items-center">
+-          <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full font-black ${index <= step ? "bg-[var(--brand)] text-white" : "bg-[var(--surface-2)] text-[var(--muted)]"}`}>{index < step ? <Check size={17}/> : index + 1}</span>
++          <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full font-black ${index <= step ? "bg-[var(--brand)] text-white" : "bg-[var(--surface-2)] text-[var(--muted)]"}`}>
++            {index < step ? <Check size={17} /> : index + 1}
++          </span>
+           <span className={`mr-2 text-xs font-bold ${index <= step ? "text-[var(--text)]" : "text-[var(--muted)]"}`}>{label}</span>
+-          {index < steps.length - 1 && <span className="mx-3 h-px flex-1 bg-[var(--line)]"/>}
++          {index < steps.length - 1 && <span className="mx-3 h-px flex-1 bg-[var(--line)]" />}
+         </div>)}
+       </div>
+     </div>
+ 
+     <Card className="p-6 sm:p-8">
+       {step === 0 && <div className="grid gap-5 sm:grid-cols-2">
+-        <Label className="sm:col-span-2">استفاده از قالب ذخیره‌شده<SelectField value={form.templateId ? String(form.templateId) : "none"} onValueChange={(value) => selectTemplate(value === "none" ? "" : value)} options={[{ value: "none", label: "بدون قالب" }, ...templates.map((item) => ({ value: String(item.id), label: item.title }))]} /></Label>
++        <Label className="sm:col-span-2">
++          استفاده از قالب ذخیره‌شده
++          <SelectField
++            value={form.templateId ? String(form.templateId) : "none"}
++            onValueChange={(value) => selectTemplate(value === "none" ? "" : value)}
++            options={[{ value: "none", label: "بدون قالب" }, ...templates.map((item) => ({ value: String(item.id), label: item.title }))]}
++          />
++          <FieldHint>قالب فقط تنظیمات اولیه را کپی می‌کند و بعداً قابل ویرایش است.</FieldHint>
++        </Label>
+         <Label>عنوان مسابقه<Input value={form.title} onChange={(event) => update("title", event.target.value)} /></Label>
+-        <Label>Slug انگلیسی<Input dir="ltr" value={form.slug} onChange={(event) => update("slug", event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))} /></Label>
++        <Label>
++          Slug انگلیسی
++          <Input dir="ltr" value={form.slug} onChange={(event) => update("slug", event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-"))} />
++        </Label>
++        <Label>زیرعنوان<Input value={form.subtitle} onChange={(event) => update("subtitle", event.target.value)} /></Label>
+         <Label>بازی<SelectField value={String(form.gameId)} onValueChange={(value) => update("gameId", Number(value))} options={games.map((game) => ({ value: String(game.id), label: game.title }))} /></Label>
+-        <Label>محل<SelectField value={form.venueId ? String(form.venueId) : "none"} onValueChange={(value) => update("venueId", value === "none" ? null : Number(value))} options={[{ value: "none", label: "بدون محل" }, ...venues.map((venue) => ({ value: String(venue.id), label: venue.title }))]} /></Label>
++        <Label>محل<SelectField value={form.venueId ? String(form.venueId) : "none"} onValueChange={(value) => update("venueId", value === "none" ? null : Number(value))} options={[{ value: "none", label: "اعلام بعدی" }, ...venues.map((venue) => ({ value: String(venue.id), label: venue.title }))]} /></Label>
+         <Label className="sm:col-span-2">توضیحات<Textarea value={form.description} onChange={(event) => update("description", event.target.value)} /></Label>
+       </div>}
+ 
+       {step === 1 && <div className="grid gap-5 sm:grid-cols-2">
+-        <Label>فرمت<SelectField value={form.format} onValueChange={(value) => update("format", value)} options={["حذفی تک‌بازی", "حذفی رفت‌وبرگشت", "دوحذفی", "گروهی و سپس حذفی", "لیگ دوره‌ای", "Swiss System"].map((value) => ({ value, label: value }))} /></Label>
+-        <Label>نوع شرکت<SelectField value={form.participantType} onValueChange={(value) => update("participantType", value as FormState["participantType"])} options={[{ value: "INDIVIDUAL", label: "انفرادی" }, { value: "TEAM", label: "تیمی" }]} /></Label>
+-        {form.participantType === "TEAM" && <Label>تعداد اعضای تیم<Input type="number" min="2" max="10" value={form.teamSize} onChange={(event) => update("teamSize", Number(event.target.value))} /></Label>}
+-        <Label>ظرفیت سهم/تیم<Input type="number" min="2" value={form.capacity} onChange={(event) => update("capacity", Number(event.target.value))} /></Label>
+-        <Label>نوع قرعه<SelectField value={form.drawMode} onValueChange={(value) => update("drawMode", value as FormState["drawMode"])} options={[{ value: "random", label: "تصادفی" }, { value: "seeded", label: "Seed شده" }, { value: "custom", label: "دستی" }]} /></Label>
++        <Label>فرمت<SelectField value={form.format} onValueChange={(value) => update("format", value as FormState["format"])} options={TOURNAMENT_FORMATS.map((value) => ({ value, label: value }))} /></Label>
++        <Label>نوع شرکت<SelectField value={form.participantType} onValueChange={(value) => setForm((current) => ({ ...current, participantType: value as FormState["participantType"], teamSize: value === "INDIVIDUAL" ? 1 : Math.max(2, current.teamSize) }))} options={[{ value: "INDIVIDUAL", label: "انفرادی" }, { value: "TEAM", label: "تیمی" }]} /></Label>
++        {form.participantType === "TEAM" && <Label>تعداد اعضای تیم<Input type="number" min="2" max="20" value={form.teamSize} onChange={(event) => update("teamSize", Number(event.target.value))} /></Label>}
++        <Label>
++          ظرفیت کل
++          <Input type="number" min="2" value={form.capacity} onChange={(event) => update("capacity", Number(event.target.value))} />
++          <FieldHint>{form.participantType === "TEAM" ? "تعداد تیم‌ها" : "تعداد بازیکنان"}</FieldHint>
++        </Label>
++        <Label>حداقل نفر برای برگزاری<Input type="number" min="2" max={form.capacity} value={form.minParticipants} onChange={(event) => update("minParticipants", Number(event.target.value))} /></Label>
++        <Label>نوع قرعه<SelectField value={form.drawMode} onValueChange={(value) => update("drawMode", value as FormState["drawMode"])} options={[{ value: "random", label: "تصادفی" }, { value: "seeded", label: "Seed بندی" }, { value: "custom", label: "دستی" }]} /></Label>
+         <Label>مسابقه رده‌بندی<SelectField value={form.hasThirdPlace ? "yes" : "no"} onValueChange={(value) => update("hasThirdPlace", value === "yes")} options={[{ value: "yes", label: "فعال" }, { value: "no", label: "غیرفعال" }]} /></Label>
+         <Label>خرید چند سهم<SelectField value={form.allowMultiSlot ? "yes" : "no"} onValueChange={(value) => update("allowMultiSlot", value === "yes")} options={[{ value: "yes", label: "فعال" }, { value: "no", label: "غیرفعال" }]} /></Label>
+       </div>}
+@@ -273,29 +390,42 @@ export function TournamentBuilder({ initialTemplateId }: { initialTemplateId?: n
+       {step === 2 && <div className="grid gap-5 sm:grid-cols-2">
+         <Label>هزینه هر سهم (تومان)<Input type="number" min="0" value={form.price} onChange={(event) => update("price", Number(event.target.value))} /></Label>
+         <Label>مهلت رزرو بدون پرداخت (دقیقه)<Input type="number" min="5" value={form.reservationExpiresMin} onChange={(event) => update("reservationExpiresMin", Number(event.target.value))} /></Label>
+-        <Alert tone="info" className="sm:col-span-2">روش‌های پرداخت ثبت‌نام شامل کارت‌به‌کارت با اطلاعات قابل تطبیق، کارتخوان حضوری و پرداخت نقدی است. تصویر رسید در انتقال بانکی اختیاری است.</Alert>
++        <Label>صف انتظار<SelectField value={form.waitlistMode} onValueChange={(value) => update("waitlistMode", value as FormState["waitlistMode"])} options={[{ value: "disabled", label: "غیرفعال" }, { value: "offer", label: "پیشنهاد با مهلت پاسخ" }, { value: "manual", label: "مدیریت دستی" }, { value: "automatic", label: "خودکار" }]} /></Label>
++        <Alert tone="info" className="sm:col-span-2">روش پرداخت از تنظیمات عمومی سایت خوانده می‌شود. این بخش فقط مبلغ، زمان رزرو و رفتار صف انتظار همین مسابقه را مشخص می‌کند.</Alert>
+       </div>}
+ 
+       {step === 3 && <div className="grid gap-5 sm:grid-cols-2">
++        <Label>شروع ثبت‌نام<PersianDatePicker mode="datetime" value={form.registrationStartsAt} onChange={(value) => update("registrationStartsAt", value)} /></Label>
++        <Label>پایان ثبت‌نام<PersianDatePicker mode="datetime" value={form.registrationEndsAt} onChange={(value) => update("registrationEndsAt", value)} /></Label>
+         <Label>شروع مسابقه<PersianDatePicker mode="datetime" value={form.startsAt} onChange={(value) => update("startsAt", value)} required /></Label>
+-        <Label>مهلت تاخیر (دقیقه)<Input type="number" min="0" value={form.lateToleranceMin} onChange={(event) => update("lateToleranceMin", Number(event.target.value))} /></Label>
+-        <Label>جایگزینی لیست انتظار<SelectField value={form.waitlistMode} onValueChange={(value) => update("waitlistMode", value as FormState["waitlistMode"])} options={[{ value: "offer", label: "پیشنهاد با مهلت پاسخ" }, { value: "manual", label: "دستی" }, { value: "automatic", label: "خودکار" }]} /></Label>
++        <Label>پایان تقریبی مسابقه<PersianDatePicker mode="datetime" value={form.endsAt} onChange={(value) => update("endsAt", value)} /></Label>
++        <Label>مهلت تأخیر (دقیقه)<Input type="number" min="0" max="180" value={form.lateToleranceMin} onChange={(event) => update("lateToleranceMin", Number(event.target.value))} /></Label>
+         <Label className="sm:col-span-2">قوانین؛ هر قانون در یک خط<Textarea className="min-h-40" value={form.rulesText} onChange={(event) => update("rulesText", event.target.value)} /></Label>
++        {!scheduleIsValid && <Alert tone="warning" className="sm:col-span-2">ترتیب درست: شروع ثبت‌نام، پایان ثبت‌نام، شروع مسابقه و سپس پایان مسابقه.</Alert>}
+       </div>}
+ 
+       {step === 4 && <div className="text-center">
+-        <span className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-emerald-500/12 text-emerald-500"><Sparkles size={30}/></span>
++        <span className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-emerald-500/12 text-emerald-500"><Sparkles size={30} /></span>
+         <h2 className="mt-5 text-2xl font-black">مسابقه آماده ذخیره است</h2>
+-        <Label className="mx-auto mt-6 max-w-sm text-right">وضعیت اولیه<SelectField value={form.status} onValueChange={(value) => update("status", value as FormState["status"])} options={[{ value: "DRAFT", label: "پیش‌نویس" }, { value: "PUBLISHED", label: "منتشرشده" }, { value: "REGISTRATION_OPEN", label: "ثبت‌نام باز" }]} /></Label>
+-        <div className="mx-auto mt-4 flex max-w-sm items-center justify-between rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-sm font-bold"><span>ذخیره تنظیمات به‌عنوان قالب</span><Switch checked={saveAsTemplate} onCheckedChange={setSaveAsTemplate} aria-label="ذخیره به عنوان قالب" /></div>
++        <Label className="mx-auto mt-6 max-w-md text-right">
++          وضعیت اولیه
++          <SelectField value={form.status} onValueChange={(value) => update("status", value as FormState["status"])} options={[{ value: "DRAFT", label: "پیش‌نویس؛ فقط مدیر می‌بیند" }, { value: "PUBLISHED", label: "منتشرشده؛ ثبت‌نام بسته" }, { value: "REGISTRATION_OPEN", label: "ثبت‌نام باز؛ فقط در بازه تعیین‌شده" }]} />
++        </Label>
++        <div className="mx-auto mt-4 flex max-w-md items-center justify-between rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-sm font-bold">
++          <span>ذخیره تنظیمات به‌عنوان قالب</span>
++          <Switch checked={saveAsTemplate} onCheckedChange={setSaveAsTemplate} aria-label="ذخیره به عنوان قالب" />
++        </div>
++        <FieldHint className="mx-auto mt-2 block max-w-md">این گزینه به‌صورت پیش‌فرض خاموش است تا برای هر مسابقه قالب تکراری ساخته نشود.</FieldHint>
+         {savedSlug && <Alert tone="success" className="mx-auto mt-5 max-w-xl justify-center">مسابقه ذخیره شد. <a className="underline" href={`/tournaments/${savedSlug}`}>مشاهده صفحه مسابقه</a></Alert>}
+       </div>}
+ 
+       {error && <Alert tone="error" className="mt-6">{error}</Alert>}
+ 
+       <div className="mt-8 flex justify-between border-t border-[var(--line)] pt-6">
+-        <Button type="button" variant="secondary" disabled={step === 0 || saving} onClick={() => setStep(step - 1)}><ChevronRight size={17}/>قبلی</Button>
+-        {step < steps.length - 1 ? <Button type="button" disabled={!canNext} onClick={() => setStep(step + 1)}>مرحله بعد<ChevronLeft size={17}/></Button> : <Button type="button" disabled={Boolean(savedSlug)} onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={17}/>ذخیره مسابقه</Button>}
++        <Button type="button" variant="secondary" disabled={step === 0 || saving} onClick={() => setStep(step - 1)}><ChevronRight size={17} />قبلی</Button>
++        {step < steps.length - 1
++          ? <Button type="button" disabled={!canNext} onClick={() => setStep(step + 1)}>مرحله بعد<ChevronLeft size={17} /></Button>
++          : <Button type="button" disabled={Boolean(savedSlug)} onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={17} />ذخیره مسابقه</Button>}
+       </div>
+     </Card>
+   </div>;
+diff --git a/src/components/admin/tournament-edit-form.tsx b/src/components/admin/tournament-edit-form.tsx
+index 2bd6cb3..a1178cc 100644
+--- a/src/components/admin/tournament-edit-form.tsx
++++ b/src/components/admin/tournament-edit-form.tsx
+@@ -1,19 +1,307 @@
+-"use client";
+-import { useState } from "react";
+-import { useRouter } from "next/navigation";
+-import { Save } from "lucide-react";
+-import { Alert } from "@/components/ui/alert";
+-import { Button } from "@/components/ui/button";
+-import { Card } from "@/components/ui/card";
+-import { Input } from "@/components/ui/input";
+-import { PersianDatePicker } from "@/components/ui/persian-date-picker";
+-import { Label } from "@/components/ui/label";
+-import { SelectField } from "@/components/ui/select";
+-import { Switch } from "@/components/ui/switch";
+-import { Textarea } from "@/components/ui/textarea";
+-type Option={id:number;title:string};
+-type Form={id:string;title:string;slug:string;subtitle:string;description:string;gameId:number;templateId:number|null;venueId:number|null;format:string;participantType:"INDIVIDUAL"|"TEAM";teamSize:number;capacity:number;minParticipants:number;price:number;status:string;registrationStartsAt:string;registrationEndsAt:string;startsAt:string;endsAt:string;reservationExpiresMin:number;lateToleranceMin:number;waitlistMode:string;allowMultiSlot:boolean;hasThirdPlace:boolean;drawMode:string;rulesText:string;gameSettingsText:string;scoringSettingsText:string;notificationSettingsText:string;cancellationSettingsText:string;prizeSettingsText:string;coverImageUrl:string;isFeatured:boolean};
+-const statuses=["DRAFT","PUBLISHED","REGISTRATION_OPEN","REGISTRATION_CLOSED","DRAW_READY","RUNNING","COMPLETED","POSTPONED","CANCELLED"].map(value=>({value,label:value}));
+-function parseObject(text:string,label:string){try{const value=JSON.parse(text||'{}');if(!value||Array.isArray(value)||typeof value!=='object')throw new Error();return value}catch{throw new Error(`${label} باید JSON Object معتبر باشد.`)}}
+-function iso(value:string){return value?new Date(value).toISOString():null}
+-export function TournamentEditForm({initial,games,venues,templates}:{initial:Form;games:Option[];venues:Option[];templates:Option[]}){const router=useRouter();const[form,setForm]=useState(initial);const[saving,setSaving]=useState(false);const[error,setError]=useState('');const[message,setMessage]=useState('');function update<K extends keyof Form>(key:K,value:Form[K]){setForm(v=>({...v,[key]:value}))}async function save(){setSaving(true);setError('');setMessage('');try{const payload={title:form.title,slug:form.slug,subtitle:form.subtitle||undefined,description:form.description||undefined,gameId:form.gameId,templateId:form.templateId,venueId:form.venueId,format:form.format,participantType:form.participantType,teamSize:form.participantType==='TEAM'?form.teamSize:1,capacity:form.capacity,minParticipants:form.minParticipants,price:form.price,status:form.status,registrationStartsAt:iso(form.registrationStartsAt),registrationEndsAt:iso(form.registrationEndsAt),startsAt:new Date(form.startsAt).toISOString(),endsAt:iso(form.endsAt),reservationExpiresMin:form.reservationExpiresMin,lateToleranceMin:form.lateToleranceMin,waitlistMode:form.waitlistMode,allowMultiSlot:form.allowMultiSlot,hasThirdPlace:form.hasThirdPlace,drawMode:form.drawMode,rules:form.rulesText.split('\n').map(v=>v.trim()).filter(Boolean),gameSettings:parseObject(form.gameSettingsText,'تنظیمات بازی'),scoringSettings:parseObject(form.scoringSettingsText,'تنظیمات امتیاز'),notificationSettings:parseObject(form.notificationSettingsText,'تنظیمات اعلان'),cancellationSettings:parseObject(form.cancellationSettingsText,'تنظیمات لغو'),prizeSettings:parseObject(form.prizeSettingsText,'تنظیمات جایزه'),coverImageUrl:form.coverImageUrl||null,isFeatured:form.isFeatured};const response=await fetch(`/api/tournaments/${form.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.message||'ویرایش انجام نشد.');setMessage('تغییرات مسابقه ذخیره شد.');router.refresh()}catch(caught){setError(caught instanceof Error?caught.message:'ویرایش انجام نشد.')}finally{setSaving(false)}}return <Card className="mt-7 p-6"><div className="grid gap-5 md:grid-cols-2"><Label>عنوان<Input value={form.title} onChange={e=>update('title',e.target.value)}/></Label><Label>Slug<Input dir="ltr" value={form.slug} onChange={e=>update('slug',e.target.value)}/></Label><Label>زیرعنوان<Input value={form.subtitle} onChange={e=>update('subtitle',e.target.value)}/></Label><Label>بازی<SelectField value={String(form.gameId)} onValueChange={v=>update('gameId',Number(v))} options={games.map(v=>({value:String(v.id),label:v.title}))}/></Label><Label>قالب<SelectField value={form.templateId?String(form.templateId):'none'} onValueChange={v=>update('templateId',v==='none'?null:Number(v))} options={[{value:'none',label:'بدون قالب'},...templates.map(v=>({value:String(v.id),label:v.title}))]}/></Label><Label>محل<SelectField value={form.venueId?String(form.venueId):'none'} onValueChange={v=>update('venueId',v==='none'?null:Number(v))} options={[{value:'none',label:'اعلام بعدی'},...venues.map(v=>({value:String(v.id),label:v.title}))]}/></Label><Label>فرمت<Input value={form.format} onChange={e=>update('format',e.target.value)}/></Label><Label>نوع شرکت‌کننده<SelectField value={form.participantType} onValueChange={v=>update('participantType',v as Form['participantType'])} options={[{value:'INDIVIDUAL',label:'انفرادی'},{value:'TEAM',label:'تیمی'}]}/></Label>{form.participantType==='TEAM'&&<Label>تعداد اعضای تیم<Input type="number" min="2" max="20" value={form.teamSize} onChange={e=>update('teamSize',Number(e.target.value))}/></Label>}<Label>ظرفیت<Input type="number" min="2" value={form.capacity} onChange={e=>update('capacity',Number(e.target.value))}/></Label><Label>حداقل شرکت‌کننده<Input type="number" min="2" value={form.minParticipants} onChange={e=>update('minParticipants',Number(e.target.value))}/></Label><Label>هزینه<Input type="number" min="0" value={form.price} onChange={e=>update('price',Number(e.target.value))}/></Label><Label>وضعیت<SelectField value={form.status} onValueChange={v=>update('status',v)} options={statuses}/></Label><Label>شروع ثبت‌نام<PersianDatePicker mode="datetime" value={form.registrationStartsAt} onChange={v=>update('registrationStartsAt',v)}/></Label><Label>پایان ثبت‌نام<PersianDatePicker mode="datetime" value={form.registrationEndsAt} onChange={v=>update('registrationEndsAt',v)}/></Label><Label>شروع مسابقه<PersianDatePicker mode="datetime" value={form.startsAt} onChange={v=>update('startsAt',v)} required/></Label><Label>پایان مسابقه<PersianDatePicker mode="datetime" value={form.endsAt} onChange={v=>update('endsAt',v)}/></Label><Label>مهلت پرداخت حضوری (دقیقه)<Input type="number" min="5" value={form.reservationExpiresMin} onChange={e=>update('reservationExpiresMin',Number(e.target.value))}/></Label><Label>مهلت تأخیر (دقیقه)<Input type="number" min="0" value={form.lateToleranceMin} onChange={e=>update('lateToleranceMin',Number(e.target.value))}/></Label><Label>صف انتظار<SelectField value={form.waitlistMode} onValueChange={v=>update('waitlistMode',v)} options={[{value:'disabled',label:'غیرفعال'},{value:'offer',label:'پیشنهاد با مهلت'},{value:'manual',label:'دستی'},{value:'automatic',label:'خودکار'}]}/></Label><Label>نوع قرعه<SelectField value={form.drawMode} onValueChange={v=>update('drawMode',v)} options={[{value:'random',label:'تصادفی'},{value:'seeded',label:'سیدبندی'},{value:'custom',label:'دستی'}]}/></Label><Label>تصویر/گرادیان کاور<Input value={form.coverImageUrl} onChange={e=>update('coverImageUrl',e.target.value)}/></Label><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>ویژه</span><Switch checked={form.isFeatured} onCheckedChange={v=>update('isFeatured',v)}/></div><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>چند سهم</span><Switch checked={form.allowMultiSlot} onCheckedChange={v=>update('allowMultiSlot',v)}/></div><div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>رده‌بندی سوم</span><Switch checked={form.hasThirdPlace} onCheckedChange={v=>update('hasThirdPlace',v)}/></div><Label className="md:col-span-2">توضیحات<Textarea className="min-h-32" value={form.description} onChange={e=>update('description',e.target.value)}/></Label><Label className="md:col-span-2">قوانین؛ هر خط یک قانون<Textarea className="min-h-40" value={form.rulesText} onChange={e=>update('rulesText',e.target.value)}/></Label>{([['gameSettingsText','تنظیمات بازی JSON'],['scoringSettingsText','تنظیمات امتیاز JSON'],['notificationSettingsText','تنظیمات اعلان JSON'],['cancellationSettingsText','تنظیمات لغو JSON'],['prizeSettingsText','تنظیمات جوایز JSON']] as const).map(([key,label])=><Label key={key}>{label}<Textarea dir="ltr" value={form[key]} onChange={e=>update(key,e.target.value)}/></Label>)}</div>{error&&<Alert tone="error" className="mt-5">{error}</Alert>}{message&&<Alert tone="success" className="mt-5">{message}</Alert>}<Button className="mt-6" type="button" onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={17}/>ذخیره تغییرات</Button></Card>}
++"use client";
++
++import { useMemo, useState } from "react";
++import { useRouter } from "next/navigation";
++import { LockKeyhole, Save } from "lucide-react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { Input } from "@/components/ui/input";
++import { PersianDatePicker } from "@/components/ui/persian-date-picker";
++import { FieldHint, Label } from "@/components/ui/label";
++import { SelectField } from "@/components/ui/select";
++import { Switch } from "@/components/ui/switch";
++import { Textarea } from "@/components/ui/textarea";
++import {
++  TOURNAMENT_FORMATS,
++  getTournamentStatusLabel,
++  getTournamentStatusOptions,
++  openRegistrationStatusError,
++  type TournamentFormat,
++  type TournamentStatus
++} from "@/lib/tournament-definition";
++
++type Option = { id: number; title: string };
++
++type Form = {
++  id: string;
++  title: string;
++  slug: string;
++  subtitle: string;
++  description: string;
++  gameId: number;
++  templateId: number | null;
++  venueId: number | null;
++  format: TournamentFormat;
++  participantType: "INDIVIDUAL" | "TEAM";
++  teamSize: number;
++  capacity: number;
++  minParticipants: number;
++  price: number;
++  status: TournamentStatus;
++  registrationStartsAt: string;
++  registrationEndsAt: string;
++  startsAt: string;
++  endsAt: string;
++  reservationExpiresMin: number;
++  lateToleranceMin: number;
++  waitlistMode: "disabled" | "offer" | "manual" | "automatic";
++  allowMultiSlot: boolean;
++  hasThirdPlace: boolean;
++  drawMode: "random" | "seeded" | "custom";
++  rulesText: string;
++  gameSettingsText: string;
++  scoringSettingsText: string;
++  notificationSettingsText: string;
++  cancellationSettingsText: string;
++  prizeSettingsText: string;
++  coverImageUrl: string;
++  isFeatured: boolean;
++};
++
++type EditMeta = {
++  registrationCount: number;
++  activeRegistrationCount: number;
++  matchCount: number;
++  holdCount: number;
++  waitlistCount: number;
++  occupied: number;
++};
++
++function parseObject(text: string, label: string) {
++  try {
++    const value = JSON.parse(text || "{}");
++    if (!value || Array.isArray(value) || typeof value !== "object") throw new Error();
++    return value;
++  } catch {
++    throw new Error(`${label} باید JSON Object معتبر باشد.`);
++  }
++}
++
++function iso(value: string) {
++  return value ? new Date(value).toISOString() : null;
++}
++
++export function TournamentEditForm({
++  initial,
++  games,
++  venues,
++  templates,
++  meta
++}: {
++  initial: Form;
++  games: Option[];
++  venues: Option[];
++  templates: Option[];
++  meta: EditMeta;
++}) {
++  const router = useRouter();
++  const [form, setForm] = useState(initial);
++  const [saving, setSaving] = useState(false);
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++
++  const structuralLocked = meta.registrationCount > 0
++    || meta.matchCount > 0
++    || meta.holdCount > 0
++    || meta.waitlistCount > 0;
++  const drawLocked = meta.matchCount > 0;
++  const scheduleLocked = meta.matchCount > 0;
++  const hasActiveData = meta.activeRegistrationCount > 0
++    || meta.matchCount > 0
++    || meta.holdCount > 0
++    || meta.waitlistCount > 0;
++
++  const statusOptions = useMemo(() => {
++    return getTournamentStatusOptions(initial.status).map((option) => ({
++      ...option,
++      disabled: option.value === "CANCELLED" && initial.status !== "CANCELLED" && hasActiveData
++    }));
++  }, [hasActiveData, initial.status]);
++
++  function update<K extends keyof Form>(key: K, value: Form[K]) {
++    setForm((current) => ({ ...current, [key]: value }));
++  }
++
++  function validate() {
++    if (form.title.trim().length < 3) return "عنوان مسابقه حداقل سه حرف باشد.";
++    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(form.slug)) return "Slug فقط شامل حروف انگلیسی کوچک، عدد و خط تیره باشد.";
++    if (form.participantType === "TEAM" && form.teamSize < 2) return "مسابقه تیمی حداقل دو عضو در هر تیم نیاز دارد.";
++    if (form.capacity < meta.occupied) return `ظرفیت کمتر از ظرفیت اشغال‌شده (${meta.occupied.toLocaleString("fa-IR")}) است.`;
++    if (form.minParticipants > form.capacity) return "حداقل شرکت‌کننده نمی‌تواند بیشتر از ظرفیت باشد.";
++    if (!form.startsAt) return "زمان شروع مسابقه الزامی است.";
++
++    const start = new Date(form.startsAt).getTime();
++    const end = form.endsAt ? new Date(form.endsAt).getTime() : null;
++    const registrationStart = form.registrationStartsAt ? new Date(form.registrationStartsAt).getTime() : null;
++    const registrationEnd = form.registrationEndsAt ? new Date(form.registrationEndsAt).getTime() : null;
++    if ((registrationStart === null) !== (registrationEnd === null)) return "شروع و پایان ثبت‌نام را هر دو تعیین کنید.";
++    if (registrationStart !== null && registrationEnd !== null) {
++      if (registrationStart >= registrationEnd) return "پایان ثبت‌نام باید بعد از شروع آن باشد.";
++      if (registrationEnd >= start) return "پایان ثبت‌نام باید قبل از شروع مسابقه باشد.";
++    }
++    if (end !== null && end <= start) return "پایان مسابقه باید بعد از شروع آن باشد.";
++
++    if (initial.status !== form.status && form.status === "REGISTRATION_OPEN") {
++      return openRegistrationStatusError({
++        registrationStartsAt: iso(form.registrationStartsAt),
++        registrationEndsAt: iso(form.registrationEndsAt),
++        startsAt: new Date(form.startsAt).toISOString()
++      });
++    }
++    return null;
++  }
++
++  async function save() {
++    setSaving(true);
++    setError("");
++    setMessage("");
++
++    try {
++      const validationError = validate();
++      if (validationError) throw new Error(validationError);
++
++      const payload = {
++        title: form.title,
++        slug: form.slug,
++        subtitle: form.subtitle || undefined,
++        description: form.description || undefined,
++        gameId: form.gameId,
++        templateId: form.templateId,
++        venueId: form.venueId,
++        format: form.format,
++        participantType: form.participantType,
++        teamSize: form.participantType === "TEAM" ? form.teamSize : 1,
++        capacity: form.capacity,
++        minParticipants: form.minParticipants,
++        price: form.price,
++        status: form.status,
++        registrationStartsAt: iso(form.registrationStartsAt),
++        registrationEndsAt: iso(form.registrationEndsAt),
++        startsAt: new Date(form.startsAt).toISOString(),
++        endsAt: iso(form.endsAt),
++        reservationExpiresMin: form.reservationExpiresMin,
++        lateToleranceMin: form.lateToleranceMin,
++        waitlistMode: form.waitlistMode,
++        allowMultiSlot: form.allowMultiSlot,
++        hasThirdPlace: form.hasThirdPlace,
++        drawMode: form.drawMode,
++        rules: form.rulesText.split("\n").map((value) => value.trim()).filter(Boolean),
++        gameSettings: parseObject(form.gameSettingsText, "تنظیمات بازی"),
++        scoringSettings: parseObject(form.scoringSettingsText, "تنظیمات امتیاز"),
++        notificationSettings: parseObject(form.notificationSettingsText, "تنظیمات اعلان"),
++        cancellationSettings: parseObject(form.cancellationSettingsText, "تنظیمات لغو"),
++        prizeSettings: parseObject(form.prizeSettingsText, "تنظیمات جایزه"),
++        coverImageUrl: form.coverImageUrl || null,
++        isFeatured: form.isFeatured
++      };
++
++      const response = await fetch(`/api/tournaments/${form.id}`, {
++        method: "PATCH",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(payload)
++      });
++      const result = await response.json();
++      if (!response.ok) throw new Error(result.message || "ویرایش انجام نشد.");
++
++      setMessage("تغییرات مسابقه ذخیره شد.");
++      router.refresh();
++    } catch (caught) {
++      setError(caught instanceof Error ? caught.message : "ویرایش انجام نشد.");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  return <div className="mt-7 space-y-5">
++    <Card className="p-5">
++      <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
++        <div><span className="text-xs text-[var(--muted)]">وضعیت فعلی</span><strong className="mt-1 block text-sm">{getTournamentStatusLabel(initial.status)}</strong></div>
++        <div><span className="text-xs text-[var(--muted)]">ثبت‌نام‌ها</span><strong className="mt-1 block">{meta.registrationCount.toLocaleString("fa-IR")}</strong></div>
++        <div><span className="text-xs text-[var(--muted)]">ظرفیت اشغال‌شده</span><strong className="mt-1 block">{meta.occupied.toLocaleString("fa-IR")}</strong></div>
++        <div><span className="text-xs text-[var(--muted)]">بازی‌ها</span><strong className="mt-1 block">{meta.matchCount.toLocaleString("fa-IR")}</strong></div>
++        <div><span className="text-xs text-[var(--muted)]">رزرو موقت</span><strong className="mt-1 block">{meta.holdCount.toLocaleString("fa-IR")}</strong></div>
++        <div><span className="text-xs text-[var(--muted)]">صف انتظار</span><strong className="mt-1 block">{meta.waitlistCount.toLocaleString("fa-IR")}</strong></div>
++      </div>
++    </Card>
++
++    {structuralLocked && <Alert tone="info"><LockKeyhole size={17} />چون برای این مسابقه داده عملیاتی ایجاد شده، بازی، فرمت و نوع شرکت‌کننده قفل هستند. ظرفیت فقط تا مقدار اشغال‌شده قابل کاهش است.</Alert>}
++
++    <Card className="p-6">
++      <section>
++        <h2 className="text-lg font-black">اطلاعات اصلی</h2>
++        <div className="mt-5 grid gap-5 md:grid-cols-2">
++          <Label>عنوان<Input value={form.title} onChange={(event) => update("title", event.target.value)} /></Label>
++          <Label>Slug<Input dir="ltr" value={form.slug} onChange={(event) => update("slug", event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-"))} /></Label>
++          <Label>زیرعنوان<Input value={form.subtitle} onChange={(event) => update("subtitle", event.target.value)} /></Label>
++          <Label>بازی<SelectField disabled={structuralLocked} value={String(form.gameId)} onValueChange={(value) => update("gameId", Number(value))} options={games.map((item) => ({ value: String(item.id), label: item.title }))} /></Label>
++          <Label>قالب<SelectField value={form.templateId ? String(form.templateId) : "none"} onValueChange={(value) => update("templateId", value === "none" ? null : Number(value))} options={[{ value: "none", label: "بدون قالب" }, ...templates.map((item) => ({ value: String(item.id), label: item.title }))]} /></Label>
++          <Label>محل<SelectField disabled={scheduleLocked} value={form.venueId ? String(form.venueId) : "none"} onValueChange={(value) => update("venueId", value === "none" ? null : Number(value))} options={[{ value: "none", label: "اعلام بعدی" }, ...venues.map((item) => ({ value: String(item.id), label: item.title }))]} /></Label>
++          <Label className="md:col-span-2">توضیحات<Textarea className="min-h-32" value={form.description} onChange={(event) => update("description", event.target.value)} /></Label>
++        </div>
++      </section>
++
++      <section className="mt-8 border-t border-[var(--line)] pt-8">
++        <h2 className="text-lg font-black">ساختار و ظرفیت</h2>
++        <div className="mt-5 grid gap-5 md:grid-cols-2">
++          <Label>فرمت<SelectField disabled={structuralLocked} value={form.format} onValueChange={(value) => update("format", value as TournamentFormat)} options={TOURNAMENT_FORMATS.map((value) => ({ value, label: value }))} /></Label>
++          <Label>نوع شرکت‌کننده<SelectField disabled={structuralLocked} value={form.participantType} onValueChange={(value) => setForm((current) => ({ ...current, participantType: value as Form["participantType"], teamSize: value === "INDIVIDUAL" ? 1 : Math.max(2, current.teamSize) }))} options={[{ value: "INDIVIDUAL", label: "انفرادی" }, { value: "TEAM", label: "تیمی" }]} /></Label>
++          {form.participantType === "TEAM" && <Label>تعداد اعضای تیم<Input disabled={structuralLocked} type="number" min="2" max="20" value={form.teamSize} onChange={(event) => update("teamSize", Number(event.target.value))} /></Label>}
++          <Label>
++            ظرفیت کل
++            <Input type="number" min={Math.max(2, meta.occupied)} value={form.capacity} onChange={(event) => update("capacity", Number(event.target.value))} />
++            <FieldHint>حداقل مجاز فعلی: {Math.max(2, meta.occupied).toLocaleString("fa-IR")}</FieldHint>
++          </Label>
++          <Label>حداقل نفر برای برگزاری<Input type="number" min="2" max={form.capacity} value={form.minParticipants} onChange={(event) => update("minParticipants", Number(event.target.value))} /></Label>
++          <Label>نوع قرعه<SelectField disabled={drawLocked} value={form.drawMode} onValueChange={(value) => update("drawMode", value as Form["drawMode"])} options={[{ value: "random", label: "تصادفی" }, { value: "seeded", label: "Seed بندی" }, { value: "custom", label: "دستی" }]} /></Label>
++          <div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>مسابقه رده‌بندی</span><Switch disabled={drawLocked} checked={form.hasThirdPlace} onCheckedChange={(value) => update("hasThirdPlace", value)} /></div>
++          <div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>خرید چند سهم</span><Switch checked={form.allowMultiSlot} onCheckedChange={(value) => update("allowMultiSlot", value)} /></div>
++        </div>
++      </section>
++
++      <section className="mt-8 border-t border-[var(--line)] pt-8">
++        <h2 className="text-lg font-black">ثبت‌نام، زمان و وضعیت</h2>
++        <div className="mt-5 grid gap-5 md:grid-cols-2">
++          <Label>شروع ثبت‌نام<PersianDatePicker mode="datetime" value={form.registrationStartsAt} onChange={(value) => update("registrationStartsAt", value)} /></Label>
++          <Label>پایان ثبت‌نام<PersianDatePicker mode="datetime" value={form.registrationEndsAt} onChange={(value) => update("registrationEndsAt", value)} /></Label>
++          <Label>شروع مسابقه<PersianDatePicker disabled={scheduleLocked} mode="datetime" value={form.startsAt} onChange={(value) => update("startsAt", value)} required /></Label>
++          <Label>پایان تقریبی مسابقه<PersianDatePicker mode="datetime" value={form.endsAt} onChange={(value) => update("endsAt", value)} /></Label>
++          <Label>هزینه (تومان)<Input type="number" min="0" value={form.price} onChange={(event) => update("price", Number(event.target.value))} /></Label>
++          <Label>مهلت رزرو بدون پرداخت (دقیقه)<Input type="number" min="5" max="1440" value={form.reservationExpiresMin} onChange={(event) => update("reservationExpiresMin", Number(event.target.value))} /></Label>
++          <Label>مهلت تأخیر (دقیقه)<Input type="number" min="0" max="180" value={form.lateToleranceMin} onChange={(event) => update("lateToleranceMin", Number(event.target.value))} /></Label>
++          <Label>صف انتظار<SelectField value={form.waitlistMode} onValueChange={(value) => update("waitlistMode", value as Form["waitlistMode"])} options={[{ value: "disabled", label: "غیرفعال" }, { value: "offer", label: "پیشنهاد با مهلت" }, { value: "manual", label: "مدیریت دستی" }, { value: "automatic", label: "خودکار" }]} /></Label>
++          <Label>
++            وضعیت
++            <SelectField value={form.status} onValueChange={(value) => update("status", value as TournamentStatus)} options={statusOptions} />
++            <FieldHint>قرعه آماده، در حال برگزاری و پایان‌یافته توسط خود سیستم تعیین می‌شوند.</FieldHint>
++          </Label>
++          <Label>تصویر یا گرادیان کاور<Input value={form.coverImageUrl} onChange={(event) => update("coverImageUrl", event.target.value)} /></Label>
++          <div className="flex items-center justify-between rounded-2xl border border-[var(--line)] p-4"><span>نمایش ویژه</span><Switch checked={form.isFeatured} onCheckedChange={(value) => update("isFeatured", value)} /></div>
++        </div>
++      </section>
++
++      <section className="mt-8 border-t border-[var(--line)] pt-8">
++        <h2 className="text-lg font-black">قوانین</h2>
++        <Label className="mt-5">هر خط یک قانون<Textarea className="min-h-40" value={form.rulesText} onChange={(event) => update("rulesText", event.target.value)} /></Label>
++      </section>
++
++      <details className="mt-8 rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-5">
++        <summary className="cursor-pointer font-black">تنظیمات پیشرفته JSON</summary>
++        <p className="mt-2 text-xs leading-6 text-[var(--muted)]">این بخش برای تنظیمات تخصصی موتور مسابقه است. اگر مطمئن نیستید، مقادیر فعلی را تغییر ندهید.</p>
++        <div className="mt-5 grid gap-5 md:grid-cols-2">
++          {([
++            ["gameSettingsText", "تنظیمات بازی"],
++            ["scoringSettingsText", "تنظیمات امتیاز"],
++            ["notificationSettingsText", "تنظیمات اعلان"],
++            ["cancellationSettingsText", "تنظیمات لغو"],
++            ["prizeSettingsText", "تنظیمات جوایز"]
++          ] as const).map(([key, label]) => <Label key={key}>{label}<Textarea dir="ltr" value={form[key]} onChange={(event) => update(key, event.target.value)} /></Label>)}
++        </div>
++      </details>
++
++      {error && <Alert tone="error" className="mt-5">{error}</Alert>}
++      {message && <Alert tone="success" className="mt-5">{message}</Alert>}
++      <Button className="mt-6" type="button" onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={17} />ذخیره تغییرات</Button>
++    </Card>
++  </div>;
++}
+diff --git a/src/components/admin/tournaments-manager.tsx b/src/components/admin/tournaments-manager.tsx
+index 01d91eb..75bf17b 100644
+--- a/src/components/admin/tournaments-manager.tsx
++++ b/src/components/admin/tournaments-manager.tsx
+@@ -1,48 +1,49 @@
+-"use client";
+-
+-import { useState } from "react";
+-import { BarChart3, CalendarClock, Edit3, ExternalLink, Shuffle, Trash2 } from "lucide-react";
+-import { Alert } from "@/components/ui/alert";
+-import { Button } from "@/components/ui/button";
+-import { Card } from "@/components/ui/card";
+-import { formatToman } from "@/lib/utils";
+-import type { Tournament } from "@/types";
+-
+-type PermissionFlags = { canDraw: boolean; canSchedule: boolean; canManage: boolean };
+-
+-export function TournamentsManager({ initialItems, permissions }: { initialItems: Tournament[]; permissions: PermissionFlags }) {
+-  const [items, setItems] = useState(initialItems);
+-  const [busyId, setBusyId] = useState("");
+-  const [error, setError] = useState("");
+-  const [message, setMessage] = useState("");
+-
+-  async function remove(item: Tournament) {
+-    if (!window.confirm(`مسابقه «${item.title}» حذف شود؟`)) return;
+-    setBusyId(item.id); setError(""); setMessage("");
+-    const response = await fetch(`/api/tournaments/${item.id}`, { method: "DELETE" });
+-    const payload = await response.json();
+-    setBusyId("");
+-    if (!response.ok) return setError(payload.message || "حذف انجام نشد.");
+-    setItems((current) => current.filter((row) => row.id !== item.id));
+-  }
+-
+-  async function runAction(item: Tournament, action: "schedule" | "ranking") {
+-    setBusyId(`${action}:${item.id}`); setError(""); setMessage("");
+-    const endpoint = action === "ranking" ? "/api/admin/rankings/recalculate" : `/api/admin/tournaments/${item.id}/${action}`;
+-    const response = await fetch(endpoint, {
+-      method: "POST",
+-      headers: { "Content-Type": "application/json" },
+-      body: action === "ranking" ? JSON.stringify({ tournamentId: Number(item.id) }) : undefined
+-    });
+-    const payload = await response.json();
+-    setBusyId("");
+-    if (!response.ok) return setError(payload.message || "عملیات انجام نشد.");
+-    setMessage(action === "schedule" ? "بازی‌ها زمان‌بندی شدند." : "رنکینگ محاسبه شد.");
+-  }
+-
+-  return <>
+-    {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+-    {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+-    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{item.status}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `schedule:${item.id}`} onClick={() => runAction(item, "schedule")} variant="secondary" size="iconSm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} /></Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runAction(item, "ranking")} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
+-  </>;
+-}
++"use client";
++
++import { useState } from "react";
++import { BarChart3, CalendarClock, Edit3, ExternalLink, Shuffle, Trash2 } from "lucide-react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { getTournamentStatusLabel } from "@/lib/tournament-definition";
++import { formatToman } from "@/lib/utils";
++import type { Tournament } from "@/types";
++
++type PermissionFlags = { canDraw: boolean; canSchedule: boolean; canManage: boolean };
++
++export function TournamentsManager({ initialItems, permissions }: { initialItems: Tournament[]; permissions: PermissionFlags }) {
++  const [items, setItems] = useState(initialItems);
++  const [busyId, setBusyId] = useState("");
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++
++  async function remove(item: Tournament) {
++    if (!window.confirm(`مسابقه «${item.title}» حذف شود؟`)) return;
++    setBusyId(item.id); setError(""); setMessage("");
++    const response = await fetch(`/api/tournaments/${item.id}`, { method: "DELETE" });
++    const payload = await response.json();
++    setBusyId("");
++    if (!response.ok) return setError(payload.message || "حذف انجام نشد.");
++    setItems((current) => current.filter((row) => row.id !== item.id));
++  }
++
++  async function runAction(item: Tournament, action: "schedule" | "ranking") {
++    setBusyId(`${action}:${item.id}`); setError(""); setMessage("");
++    const endpoint = action === "ranking" ? "/api/admin/rankings/recalculate" : `/api/admin/tournaments/${item.id}/${action}`;
++    const response = await fetch(endpoint, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: action === "ranking" ? JSON.stringify({ tournamentId: Number(item.id) }) : undefined
++    });
++    const payload = await response.json();
++    setBusyId("");
++    if (!response.ok) return setError(payload.message || "عملیات انجام نشد.");
++    setMessage(action === "schedule" ? "بازی‌ها زمان‌بندی شدند." : "رنکینگ محاسبه شد.");
++  }
++
++  return <>
++    {error && <Alert tone="error" className="mt-4">{error}</Alert>}
++    {message && <Alert tone="success" className="mt-4">{message}</Alert>}
++    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `schedule:${item.id}`} onClick={() => runAction(item, "schedule")} variant="secondary" size="iconSm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} /></Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runAction(item, "ranking")} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
++  </>;
++}
+diff --git a/src/lib/tournament-definition.ts b/src/lib/tournament-definition.ts
+new file mode 100644
+index 0000000..3c955bb
+--- /dev/null
++++ b/src/lib/tournament-definition.ts
+@@ -0,0 +1,112 @@
++export const TOURNAMENT_FORMATS = [
++  "حذفی تک‌بازی",
++  "حذفی رفت‌وبرگشت",
++  "دوحذفی",
++  "گروهی و سپس حذفی",
++  "لیگ دوره‌ای",
++  "Swiss System"
++] as const;
++
++export type TournamentFormat = (typeof TOURNAMENT_FORMATS)[number];
++
++export const TOURNAMENT_STATUSES = [
++  "DRAFT",
++  "PUBLISHED",
++  "REGISTRATION_OPEN",
++  "REGISTRATION_CLOSED",
++  "DRAW_READY",
++  "RUNNING",
++  "COMPLETED",
++  "POSTPONED",
++  "CANCELLED"
++] as const;
++
++export type TournamentStatus = (typeof TOURNAMENT_STATUSES)[number];
++
++export const TOURNAMENT_STATUS_LABELS: Record<TournamentStatus, string> = {
++  DRAFT: "پیش‌نویس",
++  PUBLISHED: "منتشرشده؛ ثبت‌نام بسته",
++  REGISTRATION_OPEN: "ثبت‌نام باز",
++  REGISTRATION_CLOSED: "ثبت‌نام بسته",
++  DRAW_READY: "قرعه آماده",
++  RUNNING: "در حال برگزاری",
++  COMPLETED: "پایان‌یافته",
++  POSTPONED: "به‌تعویق‌افتاده",
++  CANCELLED: "لغوشده"
++};
++
++const ALLOWED_STATUS_TRANSITIONS: Record<TournamentStatus, TournamentStatus[]> = {
++  DRAFT: ["DRAFT", "PUBLISHED", "REGISTRATION_OPEN", "CANCELLED"],
++  PUBLISHED: ["DRAFT", "PUBLISHED", "REGISTRATION_OPEN", "POSTPONED", "CANCELLED"],
++  REGISTRATION_OPEN: ["REGISTRATION_OPEN", "REGISTRATION_CLOSED", "POSTPONED", "CANCELLED"],
++  REGISTRATION_CLOSED: ["REGISTRATION_CLOSED", "REGISTRATION_OPEN", "POSTPONED", "CANCELLED"],
++  DRAW_READY: ["DRAW_READY", "POSTPONED", "CANCELLED"],
++  RUNNING: ["RUNNING", "POSTPONED", "CANCELLED"],
++  COMPLETED: ["COMPLETED"],
++  POSTPONED: ["POSTPONED", "PUBLISHED", "REGISTRATION_OPEN", "REGISTRATION_CLOSED", "CANCELLED"],
++  CANCELLED: ["CANCELLED"]
++};
++
++export function canChangeTournamentStatus(current: TournamentStatus, next: TournamentStatus) {
++  return ALLOWED_STATUS_TRANSITIONS[current].includes(next);
++}
++
++export function getTournamentStatusOptions(current: TournamentStatus) {
++  return ALLOWED_STATUS_TRANSITIONS[current].map((value) => ({
++    value,
++    label: TOURNAMENT_STATUS_LABELS[value]
++  }));
++}
++
++export function getTournamentStatusLabel(status: string) {
++  return TOURNAMENT_STATUS_LABELS[status as TournamentStatus] || status;
++}
++
++export function tournamentRegistrationWindowError(input: {
++  registrationStartsAt?: string | null;
++  registrationEndsAt?: string | null;
++  startsAt: string;
++}) {
++  const registrationStart = input.registrationStartsAt
++    ? new Date(input.registrationStartsAt).getTime()
++    : null;
++  const registrationEnd = input.registrationEndsAt
++    ? new Date(input.registrationEndsAt).getTime()
++    : null;
++  const tournamentStart = new Date(input.startsAt).getTime();
++
++  if ((registrationStart === null) !== (registrationEnd === null)) {
++    return "شروع و پایان ثبت‌نام باید هر دو تعیین شوند یا هر دو خالی باشند.";
++  }
++  if (registrationStart !== null && registrationEnd !== null) {
++    if (registrationStart >= registrationEnd) {
++      return "پایان ثبت‌نام باید بعد از شروع ثبت‌نام باشد.";
++    }
++    if (registrationEnd >= tournamentStart) {
++      return "پایان ثبت‌نام باید پیش از شروع مسابقه باشد.";
++    }
++  }
++  return null;
++}
++
++export function openRegistrationStatusError(input: {
++  registrationStartsAt?: string | null;
++  registrationEndsAt?: string | null;
++  startsAt: string;
++}, now = Date.now()) {
++  const genericError = tournamentRegistrationWindowError(input);
++  if (genericError) return genericError;
++  if (!input.registrationStartsAt || !input.registrationEndsAt) {
++    return "برای بازکردن ثبت‌نام، زمان شروع و پایان ثبت‌نام را تعیین کنید.";
++  }
++  const registrationStart = new Date(input.registrationStartsAt).getTime();
++  const registrationEnd = new Date(input.registrationEndsAt).getTime();
++  const tournamentStart = new Date(input.startsAt).getTime();
++  if (now < registrationStart || now >= registrationEnd) {
++    return "وضعیت «ثبت‌نام باز» فقط در بازه زمانی تعیین‌شده قابل انتخاب است.";
++  }
++  if (tournamentStart <= now) {
++    return "برای بازکردن ثبت‌نام، زمان شروع مسابقه باید در آینده باشد.";
++  }
++  return null;
++}
+diff --git a/src/lib/tournament-input.ts b/src/lib/tournament-input.ts
+index 414ae50..f1f97d5 100644
+--- a/src/lib/tournament-input.ts
++++ b/src/lib/tournament-input.ts
+@@ -1,11 +1,79 @@
+-import { z } from "zod";
+-const nullableDate=z.union([z.string().datetime(),z.null()]).optional();
+-export const tournamentInputSchema=z.object({
+- title:z.string().trim().min(3).max(200),slug:z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(180),
+- subtitle:z.string().trim().max(255).optional(),description:z.string().trim().max(10000).optional(),gameId:z.number().int().positive(),templateId:z.number().int().positive().nullable().optional(),venueId:z.number().int().positive().nullable().optional(),
+- format:z.string().trim().min(2).max(60),participantType:z.enum(["INDIVIDUAL","TEAM"]),teamSize:z.number().int().min(1).max(20),capacity:z.number().int().min(2).max(5000),minParticipants:z.number().int().min(2).max(5000).default(2),price:z.number().int().min(0),
+- status:z.enum(["DRAFT","PUBLISHED","REGISTRATION_OPEN","REGISTRATION_CLOSED","DRAW_READY","RUNNING","COMPLETED","POSTPONED","CANCELLED"]),registrationStartsAt:nullableDate,registrationEndsAt:nullableDate,startsAt:z.string().datetime(),endsAt:nullableDate,
+- reservationExpiresMin:z.number().int().min(5).max(1440),lateToleranceMin:z.number().int().min(0).max(180),waitlistMode:z.enum(["disabled","offer","manual","automatic"]),allowMultiSlot:z.boolean(),hasThirdPlace:z.boolean(),drawMode:z.enum(["random","seeded","custom"]),
+- rules:z.array(z.string().trim().min(1).max(500)).max(100),gameSettings:z.record(z.string(),z.unknown()).default({}),scoringSettings:z.record(z.string(),z.unknown()).default({}),notificationSettings:z.record(z.string(),z.unknown()).default({}),cancellationSettings:z.record(z.string(),z.unknown()).default({}),prizeSettings:z.record(z.string(),z.unknown()).default({}),coverImageUrl:z.string().trim().max(500).nullable().optional(),isFeatured:z.boolean().default(false)
+-}).superRefine((v,ctx)=>{if(v.participantType==="INDIVIDUAL"&&v.teamSize!==1)ctx.addIssue({code:"custom",path:["teamSize"],message:"اندازه تیم در مسابقه انفرادی باید ۱ باشد."});if(v.minParticipants>v.capacity)ctx.addIssue({code:"custom",path:["minParticipants"],message:"حداقل شرکت‌کننده نمی‌تواند بیشتر از ظرفیت باشد."});const start=new Date(v.startsAt).getTime();const rs=v.registrationStartsAt?new Date(v.registrationStartsAt).getTime():null;const re=v.registrationEndsAt?new Date(v.registrationEndsAt).getTime():null;const end=v.endsAt?new Date(v.endsAt).getTime():null;if(rs&&re&&rs>=re)ctx.addIssue({code:"custom",path:["registrationEndsAt"],message:"پایان ثبت‌نام باید بعد از شروع آن باشد."});if(re&&re>=start)ctx.addIssue({code:"custom",path:["registrationEndsAt"],message:"پایان ثبت‌نام باید پیش از شروع مسابقه باشد."});if(end&&end<=start)ctx.addIssue({code:"custom",path:["endsAt"],message:"پایان مسابقه باید بعد از شروع آن باشد."});});
+-export type TournamentInput=z.infer<typeof tournamentInputSchema>;
++import { z } from "zod";
++import {
++  TOURNAMENT_FORMATS,
++  TOURNAMENT_STATUSES,
++  tournamentRegistrationWindowError
++} from "@/lib/tournament-definition";
++
++const nullableDate = z.union([z.string().datetime(), z.null()]).optional();
++
++export const tournamentInputSchema = z.object({
++  title: z.string().trim().min(3).max(200),
++  slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(180),
++  subtitle: z.string().trim().max(255).optional(),
++  description: z.string().trim().max(10000).optional(),
++  gameId: z.number().int().positive(),
++  templateId: z.number().int().positive().nullable().optional(),
++  venueId: z.number().int().positive().nullable().optional(),
++  format: z.enum(TOURNAMENT_FORMATS),
++  participantType: z.enum(["INDIVIDUAL", "TEAM"]),
++  teamSize: z.number().int().min(1).max(20),
++  capacity: z.number().int().min(2).max(5000),
++  minParticipants: z.number().int().min(2).max(5000).default(2),
++  price: z.number().int().min(0),
++  status: z.enum(TOURNAMENT_STATUSES),
++  registrationStartsAt: nullableDate,
++  registrationEndsAt: nullableDate,
++  startsAt: z.string().datetime(),
++  endsAt: nullableDate,
++  reservationExpiresMin: z.number().int().min(5).max(1440),
++  lateToleranceMin: z.number().int().min(0).max(180),
++  waitlistMode: z.enum(["disabled", "offer", "manual", "automatic"]),
++  allowMultiSlot: z.boolean(),
++  hasThirdPlace: z.boolean(),
++  drawMode: z.enum(["random", "seeded", "custom"]),
++  rules: z.array(z.string().trim().min(1).max(500)).max(100),
++  gameSettings: z.record(z.string(), z.unknown()).default({}),
++  scoringSettings: z.record(z.string(), z.unknown()).default({}),
++  notificationSettings: z.record(z.string(), z.unknown()).default({}),
++  cancellationSettings: z.record(z.string(), z.unknown()).default({}),
++  prizeSettings: z.record(z.string(), z.unknown()).default({}),
++  coverImageUrl: z.string().trim().max(500).nullable().optional(),
++  isFeatured: z.boolean().default(false)
++}).superRefine((value, context) => {
++  if (value.participantType === "INDIVIDUAL" && value.teamSize !== 1) {
++    context.addIssue({
++      code: "custom",
++      path: ["teamSize"],
++      message: "اندازه تیم در مسابقه انفرادی باید ۱ باشد."
++    });
++  }
++  if (value.minParticipants > value.capacity) {
++    context.addIssue({
++      code: "custom",
++      path: ["minParticipants"],
++      message: "حداقل شرکت‌کننده نمی‌تواند بیشتر از ظرفیت باشد."
++    });
++  }
++
++  const registrationError = tournamentRegistrationWindowError(value);
++  if (registrationError) {
++    context.addIssue({
++      code: "custom",
++      path: ["registrationEndsAt"],
++      message: registrationError
++    });
++  }
++
++  const start = new Date(value.startsAt).getTime();
++  const end = value.endsAt ? new Date(value.endsAt).getTime() : null;
++  if (end !== null && end <= start) {
++    context.addIssue({
++      code: "custom",
++      path: ["endsAt"],
++      message: "پایان مسابقه باید بعد از شروع آن باشد."
++    });
++  }
++});
++
++export type TournamentInput = z.infer<typeof tournamentInputSchema>;

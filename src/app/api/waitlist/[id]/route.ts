@@ -3,7 +3,15 @@ import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { createHoldToken, parsePlayerData } from "@/lib/registration-flow";
+import {
+  acquirePlayerMobileLocks,
+  releasePlayerMobileLocks
+} from "@/lib/player-identity";
+import {
+  createHoldToken,
+  expireStaleRegistrationState,
+  parsePlayerData
+} from "@/lib/registration-flow";
 import { getRuntimeSettings } from "@/lib/runtime-settings";
 import { getAvailableSlots, offerNextWaitlistEntries } from "@/lib/waitlist";
 
@@ -25,6 +33,10 @@ type WaitRow = RowDataPacket & {
   existing_team_id: number | null;
   slots: number;
   amount: number;
+  tournament_status: string;
+  registration_starts_at: Date | null;
+  registration_ends_at: Date | null;
+  tournament_starts_at: Date;
 };
 
 type TeamMemberRow = RowDataPacket & {
@@ -80,13 +92,36 @@ export async function PATCH(
     const runtime = await getRuntimeSettings();
     const userId = Number(user.id);
     const connection = await db.getConnection();
+    let mobileLocks: string[] = [];
 
     try {
-      await connection.beginTransaction();
-      const [rows] = await connection.query<WaitRow[]>(`
-        SELECT *
+      const [preliminaryRows] = await connection.query<(RowDataPacket & { player_data: unknown })[]>(`
+        SELECT player_data
         FROM waitlist_entries
         WHERE id=? AND user_id=?
+        LIMIT 1
+      `, [id, userId]);
+      if (!preliminaryRows[0]) {
+        return NextResponse.json({ message: "رکورد صف انتظار یافت نشد." }, { status: 404 });
+      }
+      const preliminaryPlayers = parsePlayerData(preliminaryRows[0].player_data);
+      const preliminaryMobiles = preliminaryPlayers.map((player) => player.mobile);
+      if (!preliminaryPlayers.length || preliminaryMobiles.some((mobile) => !/^09\d{9}$/.test(mobile))) {
+        return NextResponse.json({ message: "اطلاعات شرکت‌کنندگان صف انتظار نامعتبر است." }, { status: 409 });
+      }
+      mobileLocks = await acquirePlayerMobileLocks(connection, preliminaryMobiles);
+
+      await connection.beginTransaction();
+      await expireStaleRegistrationState(connection);
+      const [rows] = await connection.query<WaitRow[]>(`
+        SELECT w.*,
+          t.status AS tournament_status,
+          t.registration_starts_at,
+          t.registration_ends_at,
+          t.starts_at AS tournament_starts_at
+        FROM waitlist_entries w
+        JOIN tournaments t ON t.id=w.tournament_id AND t.deleted_at IS NULL
+        WHERE w.id=? AND w.user_id=?
         LIMIT 1
         FOR UPDATE
       `, [id, userId]);
@@ -97,7 +132,38 @@ export async function PATCH(
         return NextResponse.json({ message: "رکورد صف انتظار یافت نشد." }, { status: 404 });
       }
 
+      const currentMobiles = parsePlayerData(item.player_data).map((player) => player.mobile);
+      if (JSON.stringify(currentMobiles) !== JSON.stringify(preliminaryMobiles)) {
+        await connection.rollback();
+        return NextResponse.json({
+          message: "اطلاعات صف انتظار تغییر کرده است؛ صفحه را تازه‌سازی و دوباره تلاش کنید."
+        }, { status: 409 });
+      }
+
       if (input.action === "accept") {
+        const now = Date.now();
+        const registrationStarted = !item.registration_starts_at
+          || new Date(item.registration_starts_at).getTime() <= now;
+        const registrationNotEnded = !item.registration_ends_at
+          || new Date(item.registration_ends_at).getTime() > now;
+        const tournamentNotStarted = new Date(item.tournament_starts_at).getTime() > now;
+        if (
+          item.tournament_status !== "REGISTRATION_OPEN"
+          || !registrationStarted
+          || !registrationNotEnded
+          || !tournamentNotStarted
+        ) {
+          await connection.execute(`
+            UPDATE waitlist_entries
+            SET status='EXPIRED',updated_at=NOW()
+            WHERE id=? AND status='OFFERED'
+          `, [item.id]);
+          await connection.commit();
+          return NextResponse.json({
+            message: "ثبت‌نام این مسابقه دیگر فعال نیست."
+          }, { status: 409 });
+        }
+
         const offerExpired = !item.offer_expires_at
           || new Date(item.offer_expires_at).getTime() <= Date.now();
         if (
@@ -123,6 +189,43 @@ export async function PATCH(
           return NextResponse.json({
             message: "ترکیب یا مالکیت تیم تغییر کرده است؛ این پیشنهاد را لغو و دوباره وارد صف شوید."
           }, { status: 409 });
+        }
+
+        for (const mobile of currentMobiles) {
+          const [duplicates] = await connection.query<RowDataPacket[]>(`
+            SELECT 1
+            WHERE EXISTS (
+              SELECT 1
+              FROM registrations r
+              JOIN registration_entries re ON re.registration_id=r.id
+              LEFT JOIN players p ON p.id=re.player_id
+              LEFT JOIN team_members tm ON tm.team_id=re.team_id
+              LEFT JOIN players tp ON tp.id=tm.player_id
+              WHERE r.tournament_id=?
+                AND r.deleted_at IS NULL
+                AND (
+                  r.status IN ('RESERVED','PENDING_APPROVAL','CONFIRMED','CHECKED_IN')
+                  OR (r.status='PENDING_PAYMENT' AND (r.reserved_until IS NULL OR r.reserved_until>NOW()))
+                  OR (r.status='NEEDS_CORRECTION' AND r.correction_expires_at>NOW())
+                )
+                AND (p.mobile=? OR tp.mobile=?)
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM registration_holds rh
+              WHERE rh.tournament_id=?
+                AND rh.status='ACTIVE'
+                AND rh.expires_at>NOW()
+                AND JSON_SEARCH(rh.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
+            )
+            LIMIT 1
+          `, [item.tournament_id, mobile, mobile, item.tournament_id, mobile]);
+          if (duplicates[0]) {
+            await connection.rollback();
+            return NextResponse.json({
+              message: `شماره ${mobile} قبلاً در این مسابقه ثبت یا رزرو شده است.`
+            }, { status: 409 });
+          }
         }
 
         const available = await getAvailableSlots(connection, item.tournament_id, item.id);
@@ -180,9 +283,15 @@ export async function PATCH(
       await connection.rollback();
       throw error;
     } finally {
+      await releasePlayerMobileLocks(connection, mobileLocks);
       connection.release();
     }
   } catch (error) {
+    if (error instanceof Error && error.message === "PLAYER_IDENTITY_LOCK_TIMEOUT") {
+      return NextResponse.json({
+        message: "درخواست دیگری برای یکی از این شماره‌ها در حال پردازش است. دوباره تلاش کنید."
+      }, { status: 409 });
+    }
     if (error instanceof z.ZodError) {
       return NextResponse.json({ message: "درخواست نامعتبر است." }, { status: 422 });
     }

@@ -108,6 +108,15 @@ export function PaymentsList() {
     if (!/^\d{4}$/.test(edit.cardLast4)) return setError("۴ رقم آخر کارت را صحیح وارد کنید.");
     if (edit.trackingCode.trim().length < 4) return setError("کد پیگیری را وارد کنید.");
     if (!edit.paidOn) return setError("تاریخ واریز را وارد کنید.");
+    if (edit.receipt) {
+      const allowedTypes = ["image/jpeg", "image/png", "application/pdf"];
+      if (!allowedTypes.includes(edit.receipt.type)) {
+        return setError("فقط فایل JPG، PNG یا PDF قابل ارسال است.");
+      }
+      if (edit.receipt.size <= 0 || edit.receipt.size > 5 * 1024 * 1024) {
+        return setError("حجم تصویر رسید باید حداکثر ۵ مگابایت باشد.");
+      }
+    }
 
     setBusyId(item.id);
     setError("");
@@ -138,7 +147,11 @@ export function PaymentsList() {
       const uploadPayload = await uploadResponse.json();
       if (!uploadResponse.ok) {
         setBusyId("");
-        return setError(uploadPayload.message || "اطلاعات ثبت شد اما بارگذاری تصویر رسید انجام نشد.");
+        setEditingId("");
+        setSuccess("اطلاعات انتقال ثبت شد و در صف بررسی قرار گرفت.");
+        setError(uploadPayload.message || "تصویر رسید بارگذاری نشد؛ می‌توانید دوباره آن را ارسال کنید.");
+        await load();
+        return;
       }
     }
 
@@ -158,7 +171,9 @@ export function PaymentsList() {
         const isEditing = editingId === item.id;
         const displayStatus = item.status === "PENDING" && ["pos", "cash"].includes(item.method)
           ? "در انتظار پرداخت حضوری"
-          : statusTitle[item.status] || item.status;
+          : item.status === "PENDING" && item.method === "card_to_card" && !item.submittedAt
+            ? "اطلاعات پرداخت ثبت نشده"
+            : statusTitle[item.status] || item.status;
 
         return <Card key={item.id} className="p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">

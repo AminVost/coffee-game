@@ -23,7 +23,7 @@ export function MobileMenu() {
         {open ? <X size={19} /> : <Menu size={19} />}
       </Button>
       {open && (
-        <div className="absolute inset-x-3 top-[76px] z-50 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-2 shadow-[var(--shadow-float)]">
+        <div className="absolute inset-x-3 top-[76px] z-50 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-2 ">
           {links.map(([href, label]) => (
             <Link key={href} href={href} onClick={() => setOpen(false)} className="block rounded-xl px-4 py-3 text-sm font-bold hover:bg-[var(--surface-2)]">
               {label}

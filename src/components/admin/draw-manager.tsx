@@ -2,7 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Dices, GripVertical, RefreshCcw, Save, Shuffle, Trash2, WandSparkles } from "lucide-react";
+import { CalendarClock, Dices, GripVertical, RefreshCcw, Save, Shuffle, Trash2, WandSparkles } from "lucide-react";
 import { TournamentBracket } from "@/components/tournament-bracket";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -50,7 +50,10 @@ type DrawData = {
   };
   participants: Participant[];
   matches: Match[];
+  readyForDraw: boolean;
+  blockers: Array<{ code: string; message: string }>;
   canReset: boolean;
+  resetBlockedReason: string | null;
   drawExists: boolean;
 };
 
@@ -70,6 +73,12 @@ function nextPowerOfTwo(value: number) {
   while (size < Math.max(2, value)) size *= 2;
   return size;
 }
+
+const drawModeLabels = {
+  random: "تصادفی",
+  seeded: "Seed شده",
+  custom: "دستی"
+} as const;
 
 export function DrawManager({ tournamentId }: { tournamentId: string }) {
   const [data, setData] = useState<DrawData | null>(null);
@@ -153,6 +162,18 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
 
   async function run(action: "preview" | "generate" | "regenerate") {
     if (!data) return;
+    if (data.tournament.drawMode === "seeded" && !seedComplete) {
+      setError(`برای قرعه Seed شده، Seedها باید دقیقاً از ۱ تا ${data.participants.length.toLocaleString("fa-IR")} تکمیل شوند.`);
+      return;
+    }
+    if (action === "generate" && !preview) {
+      setError("ابتدا پیش‌نمایش قرعه را بسازید و سپس همان پیش‌نمایش را ثبت کنید.");
+      return;
+    }
+    if (action === "regenerate" && !window.confirm("قرعه فعلی حذف و یک قرعه تصادفی جدید ساخته شود؟")) {
+      return;
+    }
+
     setBusy(action); setError(""); setMessage("");
     const body: Record<string, unknown> = { action };
     if (data.tournament.drawMode === "custom") {
@@ -163,7 +184,6 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
       }
     } else if (preview && action !== "preview") {
       body.participantOrder = preview.orderedKeys;
-      if (["knockout", "double"].includes(preview.category)) body.pairings = preview.pairings;
     }
     const response = await fetch(`/api/admin/tournaments/${tournamentId}/draw`, {
       method: "POST",
@@ -175,7 +195,7 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
     if (!response.ok) return setError(payload.message || "عملیات قرعه انجام نشد.");
     if (action === "preview") {
       setPreview(payload);
-      return setMessage("پیش‌نمایش ساخته شد؛ با تأیید نهایی همین Pairing ذخیره می‌شود.");
+      return setMessage("پیش‌نمایش ساخته شد؛ ثبت نهایی دقیقاً همین ترتیب را ذخیره می‌کند.");
     }
     setPreview(null);
     setMessage(action === "regenerate" ? "قرعه با موفقیت بازسازی شد." : "قرعه با موفقیت ثبت شد.");
@@ -213,7 +233,15 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
   if (loading && !data) return <Card className="mt-7 p-10 text-center text-[var(--muted)]">در حال دریافت اطلاعات قرعه...</Card>;
   if (!data) return <Alert tone="error" className="mt-6">{error || "اطلاعات مسابقه دریافت نشد."}</Alert>;
 
-  const canCreate = data.tournament.status === "REGISTRATION_CLOSED" && data.participants.length >= data.tournament.minimumParticipants;
+  const seedNumbers = data.participants
+    .map((participant) => Number(seedDraft[participant.key]))
+    .filter((seed) => Number.isInteger(seed) && seed > 0)
+    .sort((left, right) => left - right);
+  const seedComplete = data.tournament.drawMode !== "seeded" || (
+    seedNumbers.length === data.participants.length
+    && seedNumbers.every((seed, index) => seed === index + 1)
+  );
+  const canCreate = data.readyForDraw && seedComplete;
 
   return <div className="mt-7 grid gap-6">
     {error && <Alert tone="error">{error}</Alert>}
@@ -221,14 +249,18 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
 
     <Card className="p-5 sm:p-7">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div><h2 className="text-xl font-black">{data.tournament.title}</h2><p className="mt-2 text-sm text-[var(--muted)]">{data.tournament.format} · روش قرعه: {data.tournament.drawMode} · وضعیت: {data.tournament.status}</p></div>
+        <div><h2 className="text-xl font-black">{data.tournament.title}</h2><p className="mt-2 text-sm text-[var(--muted)]">{data.tournament.format} · روش قرعه: {drawModeLabels[data.tournament.drawMode]} · وضعیت: {data.tournament.status}</p></div>
         <div className="rounded-2xl bg-[var(--surface-2)] px-4 py-3 text-sm"><b>{data.participants.length.toLocaleString("fa-IR")}</b> شرکت‌کننده تأییدشده · حداقل {data.tournament.minimumParticipants.toLocaleString("fa-IR")}</div>
       </div>
-      {!canCreate && !data.drawExists && <Alert tone="warning" className="mt-5">برای ساخت قرعه، وضعیت مسابقه باید `REGISTRATION_CLOSED` باشد و تعداد شرکت‌کنندگان به حداقل تعیین‌شده برسد.</Alert>}
+      {!data.drawExists && !data.readyForDraw && <div className="mt-5 grid gap-2">{data.blockers.length
+        ? data.blockers.map((blocker) => <Alert key={blocker.code} tone="warning">{blocker.message}</Alert>)
+        : <Alert tone="warning">فهرست شرکت‌کنندگان هنوز برای قرعه نهایی نشده است.</Alert>}
+      </div>}
+      {!data.drawExists && data.tournament.drawMode === "seeded" && !seedComplete && <Alert tone="warning" className="mt-5">Seedها باید کامل، یکتا و بدون فاصله از ۱ تا {data.participants.length.toLocaleString("fa-IR")} باشند.</Alert>}
     </Card>
 
-    {!data.drawExists && <Card className="p-5 sm:p-7">
-      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">Seed بندی شرکت‌کنندگان</h2><p className="mt-1 text-xs text-[var(--muted)]">Seedهای کمتر در موقعیت‌های استاندارد براکت قرار می‌گیرند و Seedهای برتر در دور اول مقابل هم قرار نمی‌گیرند.</p></div><div className="flex gap-2"><Button type="button" variant="secondary" size="sm" onClick={autoSeed}><WandSparkles size={15}/>Seed خودکار</Button><Button type="button" size="sm" loading={busy === "seeds"} onClick={saveSeeds}><Save size={15}/>ذخیره Seed</Button></div></div>
+    {!data.drawExists && data.tournament.drawMode === "seeded" && <Card className="p-5 sm:p-7">
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">Seed بندی شرکت‌کنندگان</h2><p className="mt-1 text-xs text-[var(--muted)]">Seedهای کمتر در موقعیت‌های استاندارد براکت قرار می‌گیرند و Seedهای برتر در دور اول مقابل هم قرار نمی‌گیرند.</p></div><div className="flex gap-2"><Button type="button" variant="secondary" size="sm" disabled={!data.readyForDraw} onClick={autoSeed}><WandSparkles size={15}/>Seed خودکار</Button><Button type="button" size="sm" disabled={!data.readyForDraw} loading={busy === "seeds"} onClick={saveSeeds}><Save size={15}/>ذخیره Seed</Button></div></div>
       <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{data.participants.map((participant) => <div key={participant.key} className="grid grid-cols-[1fr_90px] items-center gap-3 rounded-2xl border border-[var(--line)] p-3"><div className="min-w-0"><strong className="block truncate">{participant.name}</strong><span className="text-xs text-[var(--muted)]" dir="ltr">{participant.mobile || participant.key}</span></div><Input type="number" min="1" max="5000" placeholder="Seed" value={seedDraft[participant.key] || ""} onChange={(event) => { setSeedDraft((current) => ({ ...current, [participant.key]: event.target.value })); setPreview(null); }}/></div>)}</div>
     </Card>}
 
@@ -242,10 +274,10 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
     </Card>}
 
     {!data.drawExists && <Card className="p-5 sm:p-7">
-      <div className="flex flex-wrap gap-3"><Button type="button" variant="secondary" loading={busy === "preview"} disabled={!canCreate} onClick={() => run("preview")}><Dices size={17}/>پیش‌نمایش قرعه</Button><Button type="button" loading={busy === "generate"} disabled={!canCreate} onClick={() => run("generate")}><Shuffle size={17}/>ثبت نهایی قرعه</Button></div>
+      <div className="flex flex-wrap gap-3"><Button type="button" variant="secondary" loading={busy === "preview"} disabled={!canCreate} onClick={() => run("preview")}><Dices size={17}/>پیش‌نمایش قرعه</Button><Button type="button" loading={busy === "generate"} disabled={!canCreate || !preview} onClick={() => run("generate")}><Shuffle size={17}/>ثبت همین پیش‌نمایش</Button></div>
       {preview && <div className="mt-6"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="font-black">{preview.pairings.length ? "پیش‌نمایش دور اول" : "پیش‌نمایش ترتیب شرکت‌کنندگان"}</h3>{preview.pairings.length ? <span className="text-xs text-[var(--muted)]">اندازه براکت: {preview.bracketSize.toLocaleString("fa-IR")}</span> : null}</div>{preview.warnings?.map((warning) => <Alert key={warning} tone="warning" className="mb-3">{warning}</Alert>)}{preview.pairings.length ? <div className="grid gap-3 md:grid-cols-2">{preview.pairings.map((pairing, index) => <div key={index} className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-center"><strong>{pairing.homeKey ? participantByKey.get(pairing.homeKey)?.name : "استراحت"}</strong><span className="text-xs text-[var(--muted)]">VS</span><strong>{pairing.awayKey ? participantByKey.get(pairing.awayKey)?.name : "استراحت"}</strong></div>)}</div> : <div className="grid gap-2 md:grid-cols-2">{preview.orderedKeys.map((key, index) => <div key={key} className="flex items-center gap-3 rounded-2xl bg-[var(--surface-2)] p-3"><span className="grid h-8 w-8 place-items-center rounded-xl bg-[var(--brand)]/12 text-xs font-black text-[var(--brand)]">{(index + 1).toLocaleString("fa-IR")}</span><strong>{participantByKey.get(key)?.name}</strong></div>)}</div>}</div>}
     </Card>}
 
-    {data.drawExists && <Card className="p-5 sm:p-7"><div className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">براکت ثبت‌شده</h2><p className="mt-1 text-xs text-[var(--muted)]">Reset و قرعه مجدد فقط پیش از شروع یا تکمیل بازی‌ها امکان‌پذیر است.</p></div><div className="flex gap-2">{data.canReset && data.tournament.drawMode !== "custom" && <Button type="button" variant="secondary" loading={busy === "regenerate"} onClick={() => run("regenerate")}><RefreshCcw size={16}/>قرعه مجدد</Button>}{data.canReset && <Button type="button" variant="dangerSoft" loading={busy === "reset"} onClick={reset}><Trash2 size={16}/>حذف قرعه</Button>}</div></div><TournamentBracket matches={data.matches}/></Card>}
+    {data.drawExists && <Card className="p-5 sm:p-7"><div className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">براکت ثبت‌شده</h2><p className="mt-1 text-xs text-[var(--muted)]">حذف یا قرعه مجدد فقط پیش از شروع بازی‌ها امکان‌پذیر است.</p></div><div className="flex flex-wrap gap-2"><Button href={`/admin/tournaments/${tournamentId}/schedule`} variant="secondary"><CalendarClock size={16}/>زمان‌بندی بازی‌ها</Button>{data.canReset && data.tournament.drawMode === "random" && <Button type="button" variant="secondary" loading={busy === "regenerate"} onClick={() => run("regenerate")}><RefreshCcw size={16}/>قرعه تصادفی مجدد</Button>}{data.canReset && <Button type="button" variant="dangerSoft" loading={busy === "reset"} onClick={reset}><Trash2 size={16}/>حذف قرعه</Button>}</div></div>{!data.canReset && data.resetBlockedReason && <Alert tone="warning" className="mb-5">{data.resetBlockedReason}</Alert>}<TournamentBracket matches={data.matches}/></Card>}
   </div>;
 }

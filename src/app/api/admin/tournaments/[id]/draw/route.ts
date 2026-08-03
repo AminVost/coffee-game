@@ -10,6 +10,7 @@ import {
   regenerateTournamentDraw,
   resetTournamentDraw
 } from "@/lib/tournament-engine";
+import { inspectTournamentParticipants } from "@/lib/tournament-participants";
 
 const participantKeySchema = z.string().regex(/^(p|t):\d+$/);
 const pairingSchema = z.object({
@@ -34,6 +35,7 @@ const messages: Record<string, string> = {
   DRAW_ALREADY_EXISTS: "قرعه این مسابقه قبلاً ساخته شده است.",
   NOT_ENOUGH_PARTICIPANTS: "حداقل دو شرکت‌کننده تأییدشده لازم است.",
   MINIMUM_PARTICIPANTS_NOT_REACHED: "تعداد شرکت‌کنندگان تأییدشده به حداقل تعیین‌شده مسابقه نرسیده است.",
+  PARTICIPANTS_NOT_FINALIZED: "فهرست شرکت‌کنندگان نهایی و بررسی نشده است. ابتدا از صفحه شرکت‌کنندگان مسابقه، نهایی‌سازی را انجام دهید.",
   DUPLICATE_SEED: "Seed تکراری است. هر Seed باید فقط به یک شرکت‌کننده اختصاص داده شود.",
   INVALID_SEED: "مقدار Seed نامعتبر است.",
   INVALID_PARTICIPANT_ORDER: "ترتیب شرکت‌کنندگان نامعتبر یا ناقص است.",
@@ -42,6 +44,12 @@ const messages: Record<string, string> = {
   MANUAL_DRAW_UNKNOWN_PARTICIPANT: "یکی از شرکت‌کنندگان قرعه دستی متعلق به این مسابقه نیست.",
   MANUAL_DRAW_DUPLICATE_PARTICIPANT: "یک شرکت‌کننده بیش از یک بار در قرعه دستی قرار گرفته است.",
   MANUAL_DRAW_MISSING_PARTICIPANT: "همه شرکت‌کنندگان باید دقیقاً یک بار در قرعه دستی قرار بگیرند.",
+  MANUAL_DRAW_INVALID_BRACKET_SIZE: "تعداد بازی‌های دور اول با اندازه استاندارد براکت هماهنگ نیست.",
+  MANUAL_DRAW_REQUIRED: "برای این نوع قرعه باید ترتیب یا Pairing دستی را مشخص کنید.",
+  SEEDED_DRAW_REQUIRES_ALL_SEEDS: "برای قرعه Seed شده باید برای همه شرکت‌کنندگان Seed تعیین شود.",
+  SEEDED_DRAW_SEEDS_MUST_BE_CONTIGUOUS: "Seedها باید بدون فاصله و از ۱ تا تعداد شرکت‌کنندگان باشند.",
+  INVALID_SEED_PAYLOAD: "فهرست Seedهای ارسالی کامل یا معتبر نیست.",
+  SEEDS_ONLY_FOR_SEEDED_DRAW: "Seed بندی فقط برای مسابقه‌ای با روش قرعه Seed شده قابل ویرایش است.",
   DRAW_RESET_LOCKED: "پس از شروع یا تکمیل یک بازی، حذف یا قرعه مجدد مجاز نیست.",
   DRAW_HAS_DISPUTES: "برای بازی‌های این قرعه اعتراض ثبت شده و حذف قرعه مجاز نیست.",
   DOUBLE_ELIMINATION_STATE_INVALID: "وضعیت براکت دوحذفی ناسازگار است."
@@ -114,7 +122,20 @@ type MatchRow = RowDataPacket & {
   away_name: string | null;
   home_seed: number | null;
   away_seed: number | null;
+  started_at: Date | null;
+  completed_at: Date | null;
+  participant_count: number;
+  has_dispute: number;
 };
+
+async function loadParticipantInspection(id: number) {
+  const connection = await db.getConnection();
+  try {
+    return await inspectTournamentParticipants(connection, id);
+  } finally {
+    connection.release();
+  }
+}
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await authorize("draws.manage");
@@ -122,7 +143,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const id = await tournamentId(params);
   if (!id) return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
 
-  const [tournamentRows, participants, matches] = await Promise.all([
+  const [tournamentRows, participants, matches, inspection] = await Promise.all([
     queryRows<TournamentInfo[]>(`
       SELECT id,title,status,format,draw_mode,min_participants,participant_type
       FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1
@@ -150,7 +171,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
              WHEN away.team_id IS NOT NULL THEN CONCAT('t:',away.team_id) END AS away_key,
         COALESCE(home_team.title,home_player.name) AS home_name,
         COALESCE(away_team.title,away_player.name) AS away_name,
-        home.seed AS home_seed,away.seed AS away_seed
+        home.seed AS home_seed,away.seed AS away_seed,
+        match_row.started_at,match_row.completed_at,
+        (SELECT COUNT(*) FROM match_participants participant_count WHERE participant_count.match_id=match_row.id) AS participant_count,
+        EXISTS(SELECT 1 FROM match_disputes dispute WHERE dispute.match_id=match_row.id) AS has_dispute
       FROM tournament_rounds round
       JOIN tournament_matches match_row ON match_row.round_id=round.id
       LEFT JOIN match_participants home ON home.match_id=match_row.id AND home.slot=1
@@ -161,7 +185,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       LEFT JOIN players away_player ON away_player.id=away.player_id
       WHERE round.tournament_id=?
       ORDER BY round.round_number,round.stage,match_row.match_number
-    `, [id])
+    `, [id]),
+    loadParticipantInspection(id)
   ]);
 
   const tournament = tournamentRows[0];
@@ -204,7 +229,23 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       homeSeed: match.home_seed === null ? null : Number(match.home_seed),
       awaySeed: match.away_seed === null ? null : Number(match.away_seed)
     })),
-    canReset: !matches.some((match) => ["LIVE", "COMPLETED"].includes(match.status)),
+    readyForDraw: Boolean(inspection?.readyForDraw),
+    blockers: inspection?.blockers || [],
+    canReset: !matches.some((match) => (
+      match.status === "LIVE"
+      || Boolean(match.started_at)
+      || (match.status === "COMPLETED" && Number(match.participant_count) >= 2)
+      || Boolean(match.has_dispute)
+    )),
+    resetBlockedReason: matches.some((match) => Boolean(match.has_dispute))
+      ? "برای یکی از بازی‌ها اعتراض ثبت شده است."
+      : matches.some((match) => (
+          match.status === "LIVE"
+          || Boolean(match.started_at)
+          || (match.status === "COMPLETED" && Number(match.participant_count) >= 2)
+        ))
+        ? "حداقل یک بازی شروع یا تکمیل شده است."
+        : null,
     drawExists: matches.length > 0
   });
 }
@@ -219,28 +260,58 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   try {
     const input = seedSchema.parse(await request.json());
     await connection.beginTransaction();
+
+    const [tournaments] = await connection.query<Array<RowDataPacket & {
+      id: number;
+      status: string;
+      draw_mode: string;
+    }>>(`
+      SELECT id,status,draw_mode
+      FROM tournaments
+      WHERE id=? AND deleted_at IS NULL
+      LIMIT 1
+      FOR UPDATE
+    `, [id]);
+    const tournament = tournaments[0];
+    if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
+    if (tournament.status !== "REGISTRATION_CLOSED") {
+      throw new Error("TOURNAMENT_NOT_READY_FOR_DRAW");
+    }
+    if (tournament.draw_mode !== "seeded") {
+      throw new Error("SEEDS_ONLY_FOR_SEEDED_DRAW");
+    }
+
+    const inspection = await inspectTournamentParticipants(connection, id);
+    if (!inspection?.readyForDraw) throw new Error("PARTICIPANTS_NOT_FINALIZED");
+
     const [existingDraw] = await connection.query<RowDataPacket[]>(`
       SELECT id FROM tournament_matches WHERE tournament_id=? LIMIT 1 FOR UPDATE
     `, [id]);
     if (existingDraw[0]) throw new Error("DRAW_ALREADY_EXISTS");
 
-    const [entries] = await connection.query<Array<RowDataPacket & { id: number; seed: number | null }>>(`
-      SELECT re.id,re.seed
+    const [entries] = await connection.query<Array<RowDataPacket & { id: number }>>(`
+      SELECT re.id
       FROM registration_entries re
       JOIN registrations registration ON registration.id=re.registration_id
       WHERE registration.tournament_id=?
         AND registration.deleted_at IS NULL
         AND registration.status IN ('CONFIRMED','CHECKED_IN')
+      ORDER BY re.id
       FOR UPDATE
     `, [id]);
     const entryIds = new Set(entries.map((entry) => Number(entry.id)));
-    if (input.seeds.some((item) => !entryIds.has(item.entryId))) {
-      throw new Error("MANUAL_DRAW_UNKNOWN_PARTICIPANT");
+    const submittedIds = new Set(input.seeds.map((item) => item.entryId));
+    if (
+      input.seeds.length !== entries.length
+      || submittedIds.size !== entries.length
+      || input.seeds.some((item) => !entryIds.has(item.entryId))
+    ) {
+      throw new Error("INVALID_SEED_PAYLOAD");
     }
 
-    const nextSeeds = new Map(entries.map((entry) => [Number(entry.id), entry.seed === null ? null : Number(entry.seed)]));
-    input.seeds.forEach((item) => nextSeeds.set(item.entryId, item.seed));
-    const values = [...nextSeeds.values()].filter((seed): seed is number => seed !== null);
+    const values = input.seeds
+      .map((item) => item.seed)
+      .filter((seed): seed is number => seed !== null);
     if (new Set(values).size !== values.length) throw new Error("DUPLICATE_SEED");
 
     for (const item of input.seeds) {

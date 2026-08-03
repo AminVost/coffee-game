@@ -60,6 +60,10 @@ type RateRow = RowDataPacket & {
   hourly_count: number;
 };
 
+type ActiveWaitlistRow = RowDataPacket & {
+  status: "WAITING" | "OFFERED";
+};
+
 type OwnedTeamRow = RowDataPacket & { id: number; title: string };
 type OwnedTeamMemberRow = RowDataPacket & { player_id: number; name: string; mobile: string | null };
 
@@ -219,6 +223,29 @@ export async function POST(request: Request) {
       `, [tournament.id, userId]);
       const existingHold = existingRows[0] || null;
 
+      if (!existingHold) {
+        const [activeWaitlistRows] = await connection.query<ActiveWaitlistRow[]>(`
+          SELECT status
+          FROM waitlist_entries
+          WHERE user_id=?
+            AND tournament_id=?
+            AND status IN ('WAITING','OFFERED')
+          ORDER BY id DESC
+          LIMIT 1
+          FOR UPDATE
+        `, [userId, tournament.id]);
+        const activeWaitlist = activeWaitlistRows[0];
+        if (activeWaitlist) {
+          await connection.rollback();
+          return NextResponse.json({
+            message: activeWaitlist.status === "OFFERED"
+              ? "برای شما ظرفیت پیشنهاد شده است؛ از بخش صف انتظار حساب کاربری آن را بپذیرید."
+              : "شما قبلاً در صف انتظار این مسابقه هستید.",
+            waitlistActive: true
+          }, { status: 409 });
+        }
+      }
+
       if (!existingHold && requestIp) {
         const [rateRows] = await connection.query<RateRow[]>(`
           SELECT COUNT(*) AS hourly_count
@@ -263,6 +290,13 @@ export async function POST(request: Request) {
               AND rh.id<>?
               AND JSON_SEARCH(rh.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
           )
+          OR EXISTS (
+            SELECT 1
+            FROM waitlist_entries w
+            WHERE w.tournament_id=?
+              AND w.status IN ('WAITING','OFFERED')
+              AND JSON_SEARCH(w.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
+          )
           LIMIT 1
         `, [
           mobile,
@@ -271,6 +305,8 @@ export async function POST(request: Request) {
           mobile,
           tournament.id,
           existingHold?.id || 0,
+          mobile,
+          tournament.id,
           mobile
         ]);
 

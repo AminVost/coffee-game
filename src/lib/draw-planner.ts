@@ -78,6 +78,10 @@ export function validateManualPairings<T extends BracketParticipant>(
   const used = new Set<string>();
 
   if (!pairings.length) throw new Error("MANUAL_DRAW_EMPTY");
+  const expectedPairingCount = nextPowerOfTwo(participants.length) / 2;
+  if (pairings.length !== expectedPairingCount) {
+    throw new Error("MANUAL_DRAW_INVALID_BRACKET_SIZE");
+  }
   for (const pairing of pairings) {
     if (!pairing.homeKey && !pairing.awayKey) throw new Error("MANUAL_DRAW_EMPTY_PAIR");
     for (const key of [pairing.homeKey, pairing.awayKey]) {
@@ -106,7 +110,7 @@ export function planKnockout<T extends BracketParticipant>(
     ));
     const slots = pairings.flatMap((pairing) => [pairing.homeKey, pairing.awayKey]);
     return {
-      bracketSize: nextPowerOfTwo(slots.length),
+      bracketSize: nextPowerOfTwo(participants.length),
       orderedKeys: slots.filter((key): key is string => Boolean(key)),
       slots,
       pairings,

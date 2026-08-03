@@ -28,7 +28,8 @@ function mapStartsAt(row: LiveMatchRow) {
   return new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit" }).format(new Date(row.scheduled_at));
 }
 
-export async function listLiveMatches(): Promise<LiveMatch[]> {
+async function queryLiveMatches(limit: number): Promise<LiveMatch[]> {
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
   const rows = await queryRows<LiveMatchRow[]>(`
     SELECT m.id,t.title AS tournament_title,tr.title AS round_title,
            res.title AS resource_title,m.status,m.home_score,m.away_score,m.scheduled_at,
@@ -48,7 +49,7 @@ export async function listLiveMatches(): Promise<LiveMatch[]> {
       AND t.deleted_at IS NULL
       AND (m.status<>'COMPLETED' OR m.completed_at>=DATE_SUB(NOW(),INTERVAL 24 HOUR))
     ORDER BY FIELD(m.status,'LIVE','READY','COMPLETED'),m.scheduled_at ASC,m.id ASC
-    LIMIT 100
+    LIMIT ${safeLimit}
   `);
 
   return rows.map((row) => ({
@@ -63,4 +64,13 @@ export async function listLiveMatches(): Promise<LiveMatch[]> {
     awayScore: row.away_score === null ? undefined : Number(row.away_score),
     startsAt: mapStartsAt(row)
   }));
+}
+
+export async function listLiveMatches(): Promise<LiveMatch[]> {
+  return queryLiveMatches(100);
+}
+
+export async function listHomeLiveMatches(requestedLimit: number): Promise<LiveMatch[]> {
+  const limit = Math.max(1, Math.min(12, Math.trunc(requestedLimit || 4)));
+  return queryLiveMatches(limit);
 }

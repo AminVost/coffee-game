@@ -5,7 +5,7 @@ export default async function Participants() {
   await requireAdminPage("checkin.manage");
   return <div>
     <p className="section-kicker">PARTICIPANTS</p>
-    <h1 className="section-title mt-2">شرکت‌کنندگان و Check-in</h1>
+    <h1 className="section-title mt-2">حضور و غیبت شرکت‌کنندگان</h1>
     <ParticipantsManager/>
   </div>;
 }

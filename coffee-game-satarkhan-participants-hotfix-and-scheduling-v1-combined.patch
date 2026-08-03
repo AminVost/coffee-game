@@ -1,0 +1,1470 @@
+diff --git a/src/app/admin/tournaments/[id]/schedule/page.tsx b/src/app/admin/tournaments/[id]/schedule/page.tsx
+new file mode 100644
+index 0000000..30b846c
+--- /dev/null
++++ b/src/app/admin/tournaments/[id]/schedule/page.tsx
+@@ -0,0 +1,24 @@
++import { TournamentScheduleManager } from "@/components/admin/tournament-schedule-manager";
++import { requireAdminPage } from "@/lib/page-authorization";
++
++export const dynamic = "force-dynamic";
++
++export default async function TournamentSchedulePage({
++  params
++}: {
++  params: Promise<{ id: string }>;
++}) {
++  await requireAdminPage("matches.manage");
++  const { id } = await params;
++
++  return (
++    <div>
++      <p className="section-kicker">MATCH SCHEDULING</p>
++      <h1 className="section-title mt-2">زمان‌بندی بازی‌ها</h1>
++      <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--muted)]">
++        ابتدا برنامه پیشنهادی را ببین و بعد همان برنامه را ثبت کن. تداخل بازیکن، میز یا دستگاه و داور به‌صورت خودکار کنترل می‌شود.
++      </p>
++      <TournamentScheduleManager tournamentId={id} />
++    </div>
++  );
++}
+diff --git a/src/app/api/admin/matches/[id]/route.ts b/src/app/api/admin/matches/[id]/route.ts
+index 4d0fe7c..d218c6f 100644
+--- a/src/app/api/admin/matches/[id]/route.ts
++++ b/src/app/api/admin/matches/[id]/route.ts
+@@ -5,6 +5,7 @@ import { authorize } from "@/lib/authorization";
+ import { hasPermission } from "@/lib/auth";
+ import { writeAuditLog } from "@/lib/audit";
+ import { db } from "@/lib/db";
++import { getRequiredResourceType } from "@/lib/resource-type";
+ import { advanceTournament, recalculateRankingsForTournament } from "@/lib/tournament-engine";
+ 
+ const schema = z.object({
+@@ -29,6 +30,10 @@ type MatchRow = RowDataPacket & {
+   resource_id: number | null;
+   scheduled_at: Date | null;
+   duration_min: number | null;
++  venue_id: number | null;
++  starts_at: Date;
++  ends_at: Date | null;
++  game_slug: string;
+   format: string;
+   game_settings: unknown;
+ };
+@@ -72,9 +77,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+       await connection.beginTransaction();
+       const [rows] = await connection.query<MatchRow[]>(`
+         SELECT m.id,m.tournament_id,m.round_id,m.status,m.home_score,m.away_score,m.referee_user_id,
+-               m.resource_id,m.scheduled_at,m.duration_min,t.format,t.game_settings
++               m.resource_id,m.scheduled_at,m.duration_min,t.venue_id,t.starts_at,t.ends_at,
++               game.slug AS game_slug,t.format,t.game_settings
+         FROM tournament_matches m
+         JOIN tournaments t ON t.id=m.tournament_id
++        JOIN games game ON game.id=t.game_id
+         WHERE m.id=?
+         LIMIT 1
+         FOR UPDATE
+@@ -127,6 +134,44 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+       const resourceId = canManageAll ? (input.resourceId || null) : match.resource_id;
+       const refereeUserId = canManageAll ? (input.refereeUserId || null) : match.referee_user_id;
+ 
++      if (["READY", "LIVE"].includes(input.status) && (!scheduledAt || !resourceId)) {
++        throw new Error("SCHEDULE_REQUIRED");
++      }
++
++      if (canManageAll) {
++        if (scheduledAt) {
++          const scheduledEnd = scheduledAt.getTime() + durationMin * 60_000;
++          if (scheduledAt.getTime() < new Date(match.starts_at).getTime()) {
++            throw new Error("SCHEDULE_BEFORE_TOURNAMENT");
++          }
++          if (match.ends_at && scheduledEnd > new Date(match.ends_at).getTime()) {
++            throw new Error("SCHEDULE_AFTER_TOURNAMENT");
++          }
++        }
++        if (resourceId) {
++          if (!match.venue_id) throw new Error("TOURNAMENT_VENUE_REQUIRED");
++          const [resourceRows] = await connection.query<RowDataPacket[]>(`
++            SELECT id
++            FROM resources
++            WHERE id=? AND venue_id=? AND is_active=1 AND status='available' AND LOWER(type)=?
++            LIMIT 1
++          `, [resourceId, match.venue_id, getRequiredResourceType(match.game_slug, settings)]);
++          if (!resourceRows[0]) throw new Error("INVALID_RESOURCE");
++        }
++        if (refereeUserId) {
++          const [refereeRows] = await connection.query<RowDataPacket[]>(`
++            SELECT DISTINCT user.id
++            FROM users user
++            JOIN user_roles user_role ON user_role.user_id=user.id
++            JOIN roles role ON role.id=user_role.role_id
++            WHERE user.id=? AND user.status='ACTIVE' AND user.deleted_at IS NULL
++              AND role.name IN ('referee','operator','manager','super_admin')
++            LIMIT 1
++          `, [refereeUserId]);
++          if (!refereeRows[0]) throw new Error("INVALID_REFEREE");
++        }
++      }
++
+       if (scheduledAt) {
+         if (resourceId) {
+           const [resourceConflict] = await connection.query<RowDataPacket[]>(`
+@@ -214,6 +259,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+       RESOURCE_CONFLICT: "منبع انتخاب‌شده در این بازه زمانی مشغول است.",
+       REFEREE_CONFLICT: "داور انتخاب‌شده در این بازه بازی دیگری دارد.",
+       PARTICIPANT_CONFLICT: "یکی از شرکت‌کنندگان در این بازه بازی دیگری دارد.",
++      SCHEDULE_REQUIRED: "برای وضعیت آماده یا زنده، زمان و میز/دستگاه را تعیین کن.",
++      SCHEDULE_BEFORE_TOURNAMENT: "زمان بازی نمی‌تواند قبل از شروع مسابقه باشد.",
++      SCHEDULE_AFTER_TOURNAMENT: "زمان بازی از پایان تعیین‌شده مسابقه عبور می‌کند.",
++      TOURNAMENT_VENUE_REQUIRED: "برای مسابقه محل برگزاری تعیین نشده است.",
++      INVALID_RESOURCE: "میز یا دستگاه انتخاب‌شده با محل و نوع بازی سازگار نیست.",
++      INVALID_REFEREE: "داور انتخاب‌شده فعال یا مجاز نیست.",
+       AGGREGATE_TIE: "مجموع نتیجه رفت‌وبرگشت مساوی است و باید نتیجه تعیین‌کننده ثبت شود."
+     };
+     return NextResponse.json({ message: messages[code] || "ذخیره بازی انجام نشد." }, { status: messages[code] ? 409 : 500 });
+diff --git a/src/app/api/admin/matches/route.ts b/src/app/api/admin/matches/route.ts
+index 442df0c..91237c4 100644
+--- a/src/app/api/admin/matches/route.ts
++++ b/src/app/api/admin/matches/route.ts
+@@ -3,9 +3,14 @@ import type { RowDataPacket } from "mysql2";
+ import { authorize } from "@/lib/authorization";
+ import { hasPermission } from "@/lib/auth";
+ import { queryRows } from "@/lib/db";
++import { getRequiredResourceType } from "@/lib/resource-type";
+ 
+ type MatchRow = RowDataPacket & {
+   id: number;
++  tournament_id: number;
++  venue_id: number | null;
++  game_slug: string;
++  game_settings: unknown;
+   tournament_title: string;
+   round_title: string | null;
+   resource_id: number | null;
+@@ -22,7 +27,7 @@ type MatchRow = RowDataPacket & {
+   notes: string | null;
+ };
+ 
+-type OptionRow = RowDataPacket & { id: number; title: string };
++type OptionRow = RowDataPacket & { id: number; title: string; venue_id: number; type: string };
+ type UserOptionRow = RowDataPacket & { id: number; name: string };
+ 
+ export async function GET() {
+@@ -35,12 +40,14 @@ export async function GET() {
+   if (!canManageAll) params.push(auth.user.id);
+ 
+   const rows = await queryRows<MatchRow[]>(`
+-    SELECT m.id,t.title AS tournament_title,tr.title AS round_title,m.resource_id,res.title AS resource_title,
++    SELECT m.id,m.tournament_id,t.venue_id,g.slug AS game_slug,t.game_settings,
++           t.title AS tournament_title,tr.title AS round_title,m.resource_id,res.title AS resource_title,
+            m.status,m.scheduled_at,m.duration_min,m.home_score,m.away_score,m.referee_user_id,referee.name AS referee_name,m.notes,
+            COALESCE(home_team.title,home_player.name) AS home_name,
+            COALESCE(away_team.title,away_player.name) AS away_name
+     FROM tournament_matches m
+     JOIN tournaments t ON t.id=m.tournament_id
++    JOIN games g ON g.id=t.game_id
+     LEFT JOIN tournament_rounds tr ON tr.id=m.round_id
+     LEFT JOIN resources res ON res.id=m.resource_id
+     LEFT JOIN users referee ON referee.id=m.referee_user_id
+@@ -56,7 +63,7 @@ export async function GET() {
+   `, params);
+ 
+   const [resources, referees] = canManageAll ? await Promise.all([
+-    queryRows<OptionRow[]>(`SELECT id,title FROM resources WHERE is_active=1 AND status='available' ORDER BY title`),
++    queryRows<OptionRow[]>(`SELECT id,title,venue_id,type FROM resources WHERE is_active=1 AND status='available' ORDER BY venue_id,title`),
+     queryRows<UserOptionRow[]>(`
+       SELECT DISTINCT u.id,u.name
+       FROM users u
+@@ -69,10 +76,18 @@ export async function GET() {
+ 
+   return NextResponse.json({
+     canManageAll,
+-    resources: resources.map((row) => ({ id: String(row.id), title: row.title })),
++    resources: resources.map((row) => ({
++      id: String(row.id),
++      title: row.title,
++      venueId: String(row.venue_id),
++      type: row.type
++    })),
+     referees: referees.map((row) => ({ id: String(row.id), title: row.name })),
+     items: rows.map((row) => ({
+       id: String(row.id),
++      tournamentId: String(row.tournament_id),
++      venueId: row.venue_id ? String(row.venue_id) : null,
++      resourceType: getRequiredResourceType(row.game_slug, row.game_settings),
+       tournament: row.tournament_title,
+       round: row.round_title || "مرحله مسابقه",
+       resourceId: row.resource_id ? String(row.resource_id) : null,
+diff --git a/src/app/api/admin/tournaments/[id]/participants/route.ts b/src/app/api/admin/tournaments/[id]/participants/route.ts
+index be33ad4..d88b279 100644
+--- a/src/app/api/admin/tournaments/[id]/participants/route.ts
++++ b/src/app/api/admin/tournaments/[id]/participants/route.ts
+@@ -31,6 +31,12 @@ export async function GET(
+       return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
+     }
+     return NextResponse.json(inspection);
++  } catch (error) {
++    console.error("tournament.participants.inspect_failed", error);
++    return NextResponse.json(
++      { message: "دریافت اطلاعات شرکت‌کنندگان انجام نشد." },
++      { status: 500 }
++    );
+   } finally {
+     connection.release();
+   }
+diff --git a/src/app/api/admin/tournaments/[id]/schedule/route.ts b/src/app/api/admin/tournaments/[id]/schedule/route.ts
+index 936cb09..89c82aa 100644
+--- a/src/app/api/admin/tournaments/[id]/schedule/route.ts
++++ b/src/app/api/admin/tournaments/[id]/schedule/route.ts
+@@ -1,26 +1,109 @@
+-import { NextResponse } from "next/server";
+-import { authorize } from "@/lib/authorization";
+-import { writeAuditLog } from "@/lib/audit";
+-import { scheduleTournamentMatches } from "@/lib/tournament-engine";
+-
+-const messages: Record<string, string> = {
+-  TOURNAMENT_NOT_FOUND: "مسابقه یافت نشد.",
+-  TOURNAMENT_VENUE_REQUIRED: "ابتدا محل برگزاری مسابقه را تعیین کنید.",
+-  NO_RESOURCES: "منبع فعالی برای زمان‌بندی در محل مسابقه وجود ندارد.",
+-  SCHEDULE_SLOT_NOT_FOUND: "بازه بدون تداخل برای زمان‌بندی همه بازی‌ها پیدا نشد."
+-};
+-
+-export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+-  const auth = await authorize("matches.manage");
+-  if (auth.response) return auth.response;
+-  const { id } = await params;
+-  if (!/^\d+$/.test(id)) return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
+-  try {
+-    const result = await scheduleTournamentMatches(Number(id));
+-    await writeAuditLog({ actorUserId: auth.user.id, action: "tournament.matches_scheduled", entityType: "tournament", entityId: id, newData: result, request });
+-    return NextResponse.json({ ok: true, ...result });
+-  } catch (error) {
+-    const code = error instanceof Error ? error.message : "";
+-    return NextResponse.json({ message: messages[code] || "زمان‌بندی بازی‌ها انجام نشد." }, { status: code === "TOURNAMENT_NOT_FOUND" ? 404 : 409 });
+-  }
+-}
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import {
++  getTournamentScheduleOverview,
++  planTournamentSchedule
++} from "@/lib/tournament-scheduling";
++
++const schema = z.object({
++  mode: z.enum(["preview", "apply"]),
++  startAt: z.string().datetime(),
++  durationMin: z.coerce.number().int().min(5).max(240),
++  roundBreakMin: z.coerce.number().int().min(0).max(120),
++  participantRestMin: z.coerce.number().int().min(0).max(120),
++  assignReferees: z.boolean().default(false)
++});
++
++const messages: Record<string, string> = {
++  TOURNAMENT_NOT_FOUND: "مسابقه یافت نشد.",
++  TOURNAMENT_NOT_READY_FOR_SCHEDULE: "زمان‌بندی فقط بعد از ساخت قرعه یا هنگام برگزاری مسابقه ممکن است.",
++  TOURNAMENT_VENUE_REQUIRED: "ابتدا محل برگزاری مسابقه را تعیین کن.",
++  NO_COMPATIBLE_RESOURCES: "در محل مسابقه، میز یا دستگاه سازگار و فعال وجود ندارد.",
++  NO_REFEREES: "برای تخصیص خودکار، داور فعال وجود ندارد.",
++  INVALID_SCHEDULE_START: "زمان شروع برنامه نامعتبر است.",
++  INVALID_TOURNAMENT_TIME_RANGE: "بازه زمانی مسابقه معتبر نیست.",
++  SCHEDULE_SLOT_NOT_FOUND: "در بازه مسابقه، زمان بدون تداخل برای همه بازی‌ها پیدا نشد."
++};
++
++function parseTournamentId(value: string) {
++  return /^\d+$/.test(value) ? Number(value) : null;
++}
++
++export async function GET(
++  _request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("matches.manage");
++  if (auth.response) return auth.response;
++
++  const { id } = await params;
++  const tournamentId = parseTournamentId(id);
++  if (!tournamentId) {
++    return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++  }
++
++  try {
++    const overview = await getTournamentScheduleOverview(tournamentId);
++    if (!overview) {
++      return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++    }
++    return NextResponse.json(overview);
++  } catch (error) {
++    console.error("tournament.schedule.overview_failed", error);
++    return NextResponse.json({ message: "دریافت اطلاعات زمان‌بندی انجام نشد." }, { status: 500 });
++  }
++}
++
++export async function POST(
++  request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("matches.manage");
++  if (auth.response) return auth.response;
++
++  const { id } = await params;
++  const tournamentId = parseTournamentId(id);
++  if (!tournamentId) {
++    return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++  }
++
++  try {
++    const input = schema.parse(await request.json());
++    const result = await planTournamentSchedule(tournamentId, {
++      ...input,
++      startAt: new Date(input.startAt)
++    });
++
++    if (input.mode === "apply") {
++      await writeAuditLog({
++        actorUserId: auth.user.id,
++        action: "tournament.matches_scheduled",
++        entityType: "tournament",
++        entityId: id,
++        newData: {
++          scheduled: result.scheduled,
++          durationMin: input.durationMin,
++          roundBreakMin: input.roundBreakMin,
++          participantRestMin: input.participantRestMin,
++          assignReferees: input.assignReferees
++        },
++        request
++      });
++    }
++
++    return NextResponse.json({ ok: true, mode: input.mode, ...result });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({ message: "تنظیمات زمان‌بندی نامعتبر است." }, { status: 422 });
++    }
++    const code = error instanceof Error ? error.message : "";
++    console.error("tournament.schedule.failed", { tournamentId, code, error });
++    const known = Boolean(messages[code]);
++    return NextResponse.json(
++      { message: messages[code] || "زمان‌بندی بازی‌ها انجام نشد." },
++      { status: code === "TOURNAMENT_NOT_FOUND" ? 404 : known ? 409 : 500 }
++    );
++  }
++}
+diff --git a/src/components/admin/draw-manager.tsx b/src/components/admin/draw-manager.tsx
+index 569dd1b..f1bcf04 100644
+--- a/src/components/admin/draw-manager.tsx
++++ b/src/components/admin/draw-manager.tsx
+@@ -2,7 +2,7 @@
+ "use client";
+ 
+ import { useCallback, useEffect, useMemo, useState } from "react";
+-import { Dices, GripVertical, RefreshCcw, Save, Shuffle, Trash2, WandSparkles } from "lucide-react";
++import { CalendarClock, Dices, GripVertical, RefreshCcw, Save, Shuffle, Trash2, WandSparkles } from "lucide-react";
+ import { TournamentBracket } from "@/components/tournament-bracket";
+ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+@@ -278,6 +278,6 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
+       {preview && <div className="mt-6"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="font-black">{preview.pairings.length ? "پیش‌نمایش دور اول" : "پیش‌نمایش ترتیب شرکت‌کنندگان"}</h3>{preview.pairings.length ? <span className="text-xs text-[var(--muted)]">اندازه براکت: {preview.bracketSize.toLocaleString("fa-IR")}</span> : null}</div>{preview.warnings?.map((warning) => <Alert key={warning} tone="warning" className="mb-3">{warning}</Alert>)}{preview.pairings.length ? <div className="grid gap-3 md:grid-cols-2">{preview.pairings.map((pairing, index) => <div key={index} className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-center"><strong>{pairing.homeKey ? participantByKey.get(pairing.homeKey)?.name : "استراحت"}</strong><span className="text-xs text-[var(--muted)]">VS</span><strong>{pairing.awayKey ? participantByKey.get(pairing.awayKey)?.name : "استراحت"}</strong></div>)}</div> : <div className="grid gap-2 md:grid-cols-2">{preview.orderedKeys.map((key, index) => <div key={key} className="flex items-center gap-3 rounded-2xl bg-[var(--surface-2)] p-3"><span className="grid h-8 w-8 place-items-center rounded-xl bg-[var(--brand)]/12 text-xs font-black text-[var(--brand)]">{(index + 1).toLocaleString("fa-IR")}</span><strong>{participantByKey.get(key)?.name}</strong></div>)}</div>}</div>}
+     </Card>}
+ 
+-    {data.drawExists && <Card className="p-5 sm:p-7"><div className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">براکت ثبت‌شده</h2><p className="mt-1 text-xs text-[var(--muted)]">حذف یا قرعه مجدد فقط پیش از شروع بازی‌ها امکان‌پذیر است.</p></div><div className="flex gap-2">{data.canReset && data.tournament.drawMode === "random" && <Button type="button" variant="secondary" loading={busy === "regenerate"} onClick={() => run("regenerate")}><RefreshCcw size={16}/>قرعه تصادفی مجدد</Button>}{data.canReset && <Button type="button" variant="dangerSoft" loading={busy === "reset"} onClick={reset}><Trash2 size={16}/>حذف قرعه</Button>}</div></div>{!data.canReset && data.resetBlockedReason && <Alert tone="warning" className="mb-5">{data.resetBlockedReason}</Alert>}<TournamentBracket matches={data.matches}/></Card>}
++    {data.drawExists && <Card className="p-5 sm:p-7"><div className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">براکت ثبت‌شده</h2><p className="mt-1 text-xs text-[var(--muted)]">حذف یا قرعه مجدد فقط پیش از شروع بازی‌ها امکان‌پذیر است.</p></div><div className="flex flex-wrap gap-2"><Button href={`/admin/tournaments/${tournamentId}/schedule`} variant="secondary"><CalendarClock size={16}/>زمان‌بندی بازی‌ها</Button>{data.canReset && data.tournament.drawMode === "random" && <Button type="button" variant="secondary" loading={busy === "regenerate"} onClick={() => run("regenerate")}><RefreshCcw size={16}/>قرعه تصادفی مجدد</Button>}{data.canReset && <Button type="button" variant="dangerSoft" loading={busy === "reset"} onClick={reset}><Trash2 size={16}/>حذف قرعه</Button>}</div></div>{!data.canReset && data.resetBlockedReason && <Alert tone="warning" className="mb-5">{data.resetBlockedReason}</Alert>}<TournamentBracket matches={data.matches}/></Card>}
+   </div>;
+ }
+diff --git a/src/components/admin/matches-manager.tsx b/src/components/admin/matches-manager.tsx
+index 95084a5..cebf0d3 100644
+--- a/src/components/admin/matches-manager.tsx
++++ b/src/components/admin/matches-manager.tsx
+@@ -14,6 +14,9 @@ import { Textarea } from "@/components/ui/textarea";
+ 
+ type MatchItem = {
+   id: string;
++  tournamentId: string;
++  venueId: string | null;
++  resourceType: string;
+   tournament: string;
+   round: string;
+   resourceId: string | null;
+@@ -30,7 +33,7 @@ type MatchItem = {
+   notes: string;
+ };
+ 
+-type Option = { id: string; title: string };
++type Option = { id: string; title: string; venueId?: string; type?: string };
+ 
+ const statusOptions = [
+   { value: "READY", label: "آماده" },
+@@ -92,6 +95,10 @@ export function MatchesManager() {
+     setError(""); setMessage("");
+   }
+ 
++  const availableResources = editing
++    ? resources.filter((item) => item.venueId === editing.venueId && item.type === editing.resourceType)
++    : [];
++
+   async function save() {
+     if (!editing) return;
+     setSaving(true); setError(""); setMessage("");
+@@ -139,7 +146,7 @@ export function MatchesManager() {
+             <Label>وضعیت<SelectField value={status} onValueChange={(value) => setStatus(value as typeof status)} options={statusOptions}/></Label>
+             {canManageAll && <Label>مدت بازی (دقیقه)<Input type="number" min="5" max="240" value={durationMin} onChange={(event) => setDurationMin(Number(event.target.value))}/></Label>}
+             {canManageAll && <Label>زمان بازی<PersianDatePicker mode="datetime" value={scheduledAt} onChange={setScheduledAt} /></Label>}
+-            {canManageAll && <Label>منبع<SelectField value={resourceId} onValueChange={setResourceId} options={[{ value: "none", label: "بدون تخصیص" }, ...resources.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
++            {canManageAll && <Label>منبع<SelectField value={resourceId} onValueChange={setResourceId} options={[{ value: "none", label: "بدون تخصیص" }, ...availableResources.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
+             {canManageAll && <Label>داور<SelectField value={refereeUserId} onValueChange={setRefereeUserId} options={[{ value: "none", label: "بدون داور" }, ...referees.map((item) => ({ value: item.id, label: item.title }))]}/></Label>}
+             <Label className="sm:col-span-2">یادداشت<Textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-24"/></Label>
+           </div>
+diff --git a/src/components/admin/tournament-participants-manager.tsx b/src/components/admin/tournament-participants-manager.tsx
+index ba09754..8ad34d1 100644
+--- a/src/components/admin/tournament-participants-manager.tsx
++++ b/src/components/admin/tournament-participants-manager.tsx
+@@ -79,6 +79,16 @@ function participantDetails(registration: Registration) {
+   return mobiles.join("، ") || registration.contactMobile || "—";
+ }
+ 
++async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
++  const text = await response.text();
++  if (!text.trim()) return {};
++  try {
++    return JSON.parse(text) as Record<string, unknown>;
++  } catch {
++    return {};
++  }
++}
++
+ export function TournamentParticipantsManager({ tournamentId }: { tournamentId: string }) {
+   const [data, setData] = useState<Inspection | null>(null);
+   const [loading, setLoading] = useState(true);
+@@ -89,14 +99,21 @@ export function TournamentParticipantsManager({ tournamentId }: { tournamentId:
+   async function load() {
+     setLoading(true);
+     setError("");
+-    const response = await fetch(`/api/admin/tournaments/${tournamentId}/participants`, { cache: "no-store" });
+-    const payload = await response.json();
+-    setLoading(false);
+-    if (!response.ok) {
+-      setError(payload.message || "دریافت اطلاعات شرکت‌کنندگان انجام نشد.");
+-      return;
++    try {
++      const response = await fetch(`/api/admin/tournaments/${tournamentId}/participants`, { cache: "no-store" });
++      const payload = await readJsonResponse(response);
++      if (!response.ok) {
++        setData(null);
++        setError(String(payload.message || "دریافت اطلاعات شرکت‌کنندگان انجام نشد."));
++        return;
++      }
++      setData(payload as unknown as Inspection);
++    } catch {
++      setData(null);
++      setError("ارتباط با سرور برای دریافت شرکت‌کنندگان برقرار نشد.");
++    } finally {
++      setLoading(false);
+     }
+-    setData(payload);
+   }
+ 
+   useEffect(() => { void load(); }, [tournamentId]);
+@@ -120,18 +137,24 @@ export function TournamentParticipantsManager({ tournamentId }: { tournamentId:
+     setBusy(true);
+     setError("");
+     setMessage("");
+-    const response = await fetch(`/api/admin/tournaments/${tournamentId}/participants`, { method: "POST" });
+-    const payload = await response.json();
+-    setBusy(false);
+-    if (!response.ok) {
+-      setError(payload.message || "نهایی‌سازی انجام نشد.");
+-      if (payload.blockers?.length) {
+-        setError(`${payload.message || "نهایی‌سازی انجام نشد."} ${payload.blockers.map((item: { message: string }) => item.message).join(" ")}`);
++    try {
++      const response = await fetch(`/api/admin/tournaments/${tournamentId}/participants`, { method: "POST" });
++      const payload = await readJsonResponse(response);
++      if (!response.ok) {
++        const blockers = Array.isArray(payload.blockers)
++          ? payload.blockers as Array<{ message?: string }>
++          : [];
++        const blockerText = blockers.map((item) => item.message).filter(Boolean).join(" ");
++        setError(`${String(payload.message || "نهایی‌سازی انجام نشد.")}${blockerText ? ` ${blockerText}` : ""}`);
++        return;
+       }
+-      return;
++      setData(payload.inspection as Inspection);
++      setMessage("فهرست شرکت‌کنندگان نهایی شد و مسابقه آماده ورود به مرحله قرعه است.");
++    } catch {
++      setError("ارتباط با سرور برای نهایی‌سازی شرکت‌کنندگان برقرار نشد.");
++    } finally {
++      setBusy(false);
+     }
+-    setData(payload.inspection);
+-    setMessage("فهرست شرکت‌کنندگان نهایی شد و مسابقه آماده ورود به مرحله قرعه است.");
+   }
+ 
+   if (loading) return <Card className="mt-7 p-8 text-center text-[var(--muted)]">در حال بررسی ثبت‌نام‌ها...</Card>;
+diff --git a/src/components/admin/tournament-schedule-manager.tsx b/src/components/admin/tournament-schedule-manager.tsx
+new file mode 100644
+index 0000000..3ecf40f
+--- /dev/null
++++ b/src/components/admin/tournament-schedule-manager.tsx
+@@ -0,0 +1,263 @@
++/* eslint-disable react-hooks/set-state-in-effect */
++"use client";
++
++import { useEffect, useMemo, useState } from "react";
++import { CalendarClock, CheckCircle2, Clock3, Eye, RefreshCcw, UsersRound } from "lucide-react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { Input } from "@/components/ui/input";
++import { Label } from "@/components/ui/label";
++import { PersianDatePicker } from "@/components/ui/persian-date-picker";
++
++
++type Overview = {
++  tournament: {
++    id: number;
++    title: string;
++    status: string;
++    startsAt: string;
++    endsAt: string | null;
++    venueId: string | null;
++    venue: string | null;
++    game: string;
++    resourceType: string;
++  };
++  defaults: {
++    durationMin: number;
++    roundBreakMin: number;
++    participantRestMin: number;
++    startAt: string;
++  };
++  counts: {
++    total: number;
++    scheduled: number;
++    unscheduled: number;
++    completed: number;
++  };
++  resources: Array<{ id: string; title: string; type: string }>;
++  referees: Array<{ id: string; title: string }>;
++  matches: Array<{
++    id: string;
++    matchNumber: number;
++    round: string;
++    status: string;
++    scheduledAt: string | null;
++    durationMin: number | null;
++    home: string;
++    away: string;
++  }>;
++};
++
++type PlanItem = {
++  matchId: string;
++  matchNumber: number;
++  round: string;
++  home: string;
++  away: string;
++  scheduledAt: string;
++  durationMin: number;
++  resourceId: string;
++  resource: string;
++  refereeUserId: string | null;
++  referee: string | null;
++};
++
++function toLocalInput(value: string) {
++  const date = new Date(value);
++  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
++  return local.toISOString().slice(0, 16);
++}
++
++async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
++  const text = await response.text();
++  if (!text.trim()) return {};
++  try {
++    return JSON.parse(text) as Record<string, unknown>;
++  } catch {
++    return {};
++  }
++}
++
++function formatDateTime(value: string) {
++  return new Intl.DateTimeFormat("fa-IR", {
++    dateStyle: "short",
++    timeStyle: "short"
++  }).format(new Date(value));
++}
++
++export function TournamentScheduleManager({ tournamentId }: { tournamentId: string }) {
++  const [overview, setOverview] = useState<Overview | null>(null);
++  const [startAt, setStartAt] = useState("");
++  const [durationMin, setDurationMin] = useState(30);
++  const [roundBreakMin, setRoundBreakMin] = useState(10);
++  const [participantRestMin, setParticipantRestMin] = useState(10);
++  const [assignReferees, setAssignReferees] = useState(false);
++  const [plan, setPlan] = useState<PlanItem[]>([]);
++  const [previewSignature, setPreviewSignature] = useState("");
++  const [loading, setLoading] = useState(true);
++  const [busy, setBusy] = useState<"preview" | "apply" | "">("");
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++
++  const signature = useMemo(() => JSON.stringify({
++    startAt,
++    durationMin,
++    roundBreakMin,
++    participantRestMin,
++    assignReferees
++  }), [startAt, durationMin, roundBreakMin, participantRestMin, assignReferees]);
++
++  async function load(resetForm = false) {
++    setLoading(true);
++    setError("");
++    try {
++      const response = await fetch(`/api/admin/tournaments/${tournamentId}/schedule`, { cache: "no-store" });
++      const payload = await readJsonResponse(response);
++      if (!response.ok) {
++        setOverview(null);
++        setError(String(payload.message || "دریافت اطلاعات زمان‌بندی انجام نشد."));
++        return;
++      }
++      const next = payload as unknown as Overview;
++      setOverview(next);
++      if (resetForm || !startAt) {
++        setStartAt(toLocalInput(next.defaults.startAt));
++        setDurationMin(next.defaults.durationMin);
++        setRoundBreakMin(next.defaults.roundBreakMin);
++        setParticipantRestMin(next.defaults.participantRestMin);
++      }
++    } catch {
++      setOverview(null);
++      setError("ارتباط با سرور برای دریافت برنامه برقرار نشد.");
++    } finally {
++      setLoading(false);
++    }
++  }
++
++  useEffect(() => { void load(true); }, [tournamentId]);
++
++  async function submit(mode: "preview" | "apply") {
++    if (!startAt) return setError("زمان شروع برنامه را انتخاب کن.");
++    setBusy(mode);
++    setError("");
++    setMessage("");
++    try {
++      const response = await fetch(`/api/admin/tournaments/${tournamentId}/schedule`, {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({
++          mode,
++          startAt: new Date(startAt).toISOString(),
++          durationMin,
++          roundBreakMin,
++          participantRestMin,
++          assignReferees
++        })
++      });
++      const payload = await readJsonResponse(response);
++      if (!response.ok) {
++        setError(String(payload.message || "زمان‌بندی بازی‌ها انجام نشد."));
++        return;
++      }
++      const nextPlan = Array.isArray(payload.plan) ? payload.plan as PlanItem[] : [];
++      setPlan(nextPlan);
++      if (mode === "preview") {
++        setPreviewSignature(signature);
++        setMessage(nextPlan.length ? "برنامه پیشنهادی آماده است. پس از بررسی، آن را ثبت کن." : "بازی زمان‌بندی‌نشده‌ای وجود ندارد.");
++      } else {
++        setPreviewSignature("");
++        setMessage(`${Number(payload.scheduled || 0).toLocaleString("fa-IR")} بازی زمان‌بندی شد.`);
++        await load(false);
++      }
++    } catch {
++      setError("ارتباط با سرور برای زمان‌بندی برقرار نشد.");
++    } finally {
++      setBusy("");
++    }
++  }
++
++  if (loading) {
++    return <Card className="mt-7 p-8 text-center text-[var(--muted)]">در حال دریافت اطلاعات زمان‌بندی...</Card>;
++  }
++  if (!overview) {
++    return <Alert tone="error" className="mt-7">{error || "اطلاعات مسابقه دریافت نشد."}</Alert>;
++  }
++
++  const validStatus = ["DRAW_READY", "RUNNING"].includes(overview.tournament.status);
++  const canPreview = validStatus
++    && Boolean(overview.tournament.venueId)
++    && overview.resources.length > 0
++    && overview.counts.unscheduled > 0;
++  const canApply = canPreview && plan.length > 0 && previewSignature === signature;
++
++  return (
++    <div className="mt-7 space-y-5">
++      {error && <Alert tone="error">{error}</Alert>}
++      {message && <Alert tone="success">{message}</Alert>}
++      {!validStatus && <Alert tone="warning">ابتدا قرعه را نهایی کن. زمان‌بندی در وضعیت «قرعه آماده» یا «در حال برگزاری» فعال است.</Alert>}
++      {!overview.tournament.venueId && <Alert tone="error">برای مسابقه محل برگزاری تعیین نشده است.</Alert>}
++      {overview.tournament.venueId && !overview.resources.length && <Alert tone="error">در این محل، میز یا دستگاه سازگار و فعال وجود ندارد.</Alert>}
++
++      <Card className="p-5 sm:p-7">
++        <div className="flex flex-wrap items-start justify-between gap-4">
++          <div>
++            <h2 className="text-xl font-black">{overview.tournament.title}</h2>
++            <p className="mt-2 text-sm text-[var(--muted)]">
++              {overview.tournament.game} · {overview.tournament.venue || "بدون محل"}
++            </p>
++          </div>
++          <Button type="button" variant="secondary" onClick={() => void load(false)}>
++            <RefreshCcw size={16} />بازبینی
++          </Button>
++        </div>
++        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
++          <div className="rounded-2xl bg-[var(--surface-2)] p-4"><CalendarClock size={19} className="text-[var(--brand)]"/><strong className="mt-3 block text-2xl">{overview.counts.total.toLocaleString("fa-IR")}</strong><span className="text-xs text-[var(--muted)]">کل بازی‌ها</span></div>
++          <div className="rounded-2xl bg-[var(--surface-2)] p-4"><CheckCircle2 size={19} className="text-emerald-500"/><strong className="mt-3 block text-2xl">{overview.counts.scheduled.toLocaleString("fa-IR")}</strong><span className="text-xs text-[var(--muted)]">زمان‌بندی‌شده</span></div>
++          <div className="rounded-2xl bg-[var(--surface-2)] p-4"><Clock3 size={19} className="text-amber-500"/><strong className="mt-3 block text-2xl">{overview.counts.unscheduled.toLocaleString("fa-IR")}</strong><span className="text-xs text-[var(--muted)]">بدون زمان</span></div>
++          <div className="rounded-2xl bg-[var(--surface-2)] p-4"><UsersRound size={19} className="text-sky-500"/><strong className="mt-3 block text-2xl">{overview.resources.length.toLocaleString("fa-IR")}</strong><span className="text-xs text-[var(--muted)]">منبع سازگار</span></div>
++        </div>
++      </Card>
++
++      <Card className="p-5 sm:p-7">
++        <h2 className="font-black">تنظیم برنامه پیشنهادی</h2>
++        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">این تنظیمات فقط روی بازی‌های بدون زمان اعمال می‌شوند و برنامه قبلی را تغییر نمی‌دهند.</p>
++        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
++          <Label>شروع برنامه<PersianDatePicker mode="datetime" value={startAt} onChange={(value) => { setStartAt(value); setPreviewSignature(""); }} /></Label>
++          <Label>مدت هر بازی (دقیقه)<Input type="number" min="5" max="240" value={durationMin} onChange={(event) => { setDurationMin(Number(event.target.value)); setPreviewSignature(""); }}/></Label>
++          <Label>فاصله بین دورها (دقیقه)<Input type="number" min="0" max="120" value={roundBreakMin} onChange={(event) => { setRoundBreakMin(Number(event.target.value)); setPreviewSignature(""); }}/></Label>
++          <Label>استراحت هر شرکت‌کننده (دقیقه)<Input type="number" min="0" max="120" value={participantRestMin} onChange={(event) => { setParticipantRestMin(Number(event.target.value)); setPreviewSignature(""); }}/></Label>
++        </div>
++        <label className="mt-5 flex cursor-pointer items-center gap-3 text-sm font-bold">
++          <input type="checkbox" checked={assignReferees} onChange={(event) => { setAssignReferees(event.target.checked); setPreviewSignature(""); }} />
++          تخصیص خودکار داور
++          <span className="text-xs font-normal text-[var(--muted)]">({overview.referees.length.toLocaleString("fa-IR")} داور قابل انتخاب)</span>
++        </label>
++        <div className="mt-6 flex flex-wrap gap-3">
++          <Button type="button" disabled={!canPreview || Boolean(busy)} loading={busy === "preview"} onClick={() => void submit("preview")}>
++            <Eye size={16}/>پیش‌نمایش برنامه
++          </Button>
++          <Button type="button" variant="secondary" disabled={!canApply || Boolean(busy)} loading={busy === "apply"} onClick={() => void submit("apply")}>
++            <CheckCircle2 size={16}/>ثبت همین برنامه
++          </Button>
++          <Button href="/admin/matches" variant="ghost">مدیریت دستی بازی‌ها</Button>
++        </div>
++      </Card>
++
++      {plan.length > 0 && <Card className="overflow-hidden">
++        <div className="border-b border-[var(--line)] p-5"><h2 className="font-black">برنامه پیشنهادی</h2><p className="mt-1 text-xs text-[var(--muted)]">تا وقتی تنظیمات بالا تغییر نکند، همین برنامه قابل ثبت است.</p></div>
++        <div className="overflow-x-auto">
++          <table className="w-full min-w-[900px] text-right text-sm">
++            <thead className="bg-[var(--surface-2)]"><tr><th className="p-4">بازی</th><th className="p-4">دور</th><th className="p-4">دو طرف</th><th className="p-4">زمان</th><th className="p-4">میز/دستگاه</th><th className="p-4">داور</th></tr></thead>
++            <tbody>{plan.map((item) => <tr key={item.matchId} className="border-t border-[var(--line)]"><td className="p-4">#{item.matchNumber.toLocaleString("fa-IR")}</td><td className="p-4">{item.round}</td><td className="p-4 font-bold">{item.home} — {item.away}</td><td className="p-4">{formatDateTime(item.scheduledAt)}</td><td className="p-4">{item.resource}</td><td className="p-4">{item.referee || "بدون داور"}</td></tr>)}</tbody>
++          </table>
++        </div>
++      </Card>}
++
++      {overview.matches.some((match) => match.scheduledAt) && <Card className="overflow-hidden">
++        <div className="border-b border-[var(--line)] p-5"><h2 className="font-black">بازی‌های ثبت‌شده</h2></div>
++        <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-right text-sm"><thead className="bg-[var(--surface-2)]"><tr><th className="p-4">بازی</th><th className="p-4">دور</th><th className="p-4">دو طرف</th><th className="p-4">زمان</th><th className="p-4">وضعیت</th></tr></thead><tbody>{overview.matches.filter((match) => match.scheduledAt).map((match) => <tr key={match.id} className="border-t border-[var(--line)]"><td className="p-4">#{match.matchNumber.toLocaleString("fa-IR")}</td><td className="p-4">{match.round}</td><td className="p-4 font-bold">{match.home} — {match.away}</td><td className="p-4">{formatDateTime(match.scheduledAt!)}</td><td className="p-4">{match.status}</td></tr>)}</tbody></table></div>
++      </Card>}
++    </div>
++  );
++}
+diff --git a/src/components/admin/tournaments-manager.tsx b/src/components/admin/tournaments-manager.tsx
+index 613049b..1127076 100644
+--- a/src/components/admin/tournaments-manager.tsx
++++ b/src/components/admin/tournaments-manager.tsx
+@@ -27,23 +27,22 @@ export function TournamentsManager({ initialItems, permissions }: { initialItems
+     setItems((current) => current.filter((row) => row.id !== item.id));
+   }
+ 
+-  async function runAction(item: Tournament, action: "schedule" | "ranking") {
+-    setBusyId(`${action}:${item.id}`); setError(""); setMessage("");
+-    const endpoint = action === "ranking" ? "/api/admin/rankings/recalculate" : `/api/admin/tournaments/${item.id}/${action}`;
+-    const response = await fetch(endpoint, {
++  async function runRanking(item: Tournament) {
++    setBusyId(`ranking:${item.id}`); setError(""); setMessage("");
++    const response = await fetch("/api/admin/rankings/recalculate", {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+-      body: action === "ranking" ? JSON.stringify({ tournamentId: Number(item.id) }) : undefined
++      body: JSON.stringify({ tournamentId: Number(item.id) })
+     });
+     const payload = await response.json();
+     setBusyId("");
+     if (!response.ok) return setError(payload.message || "عملیات انجام نشد.");
+-    setMessage(action === "schedule" ? "بازی‌ها زمان‌بندی شدند." : "رنکینگ محاسبه شد.");
++    setMessage("رنکینگ محاسبه شد.");
+   }
+ 
+   return <>
+     {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+     {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+-    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/participants`} variant="secondary" size="sm" aria-label="نهایی‌سازی شرکت‌کنندگان"><ListChecks size={15} />شرکت‌کنندگان</Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `schedule:${item.id}`} onClick={() => runAction(item, "schedule")} variant="secondary" size="iconSm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} /></Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runAction(item, "ranking")} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
++    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/participants`} variant="secondary" size="sm" aria-label="نهایی‌سازی شرکت‌کنندگان"><ListChecks size={15} />شرکت‌کنندگان</Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button href={`/admin/tournaments/${item.id}/schedule`} variant="secondary" size="sm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} />زمان‌بندی</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runRanking(item)} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
+   </>;
+ }
+diff --git a/src/lib/resource-type.ts b/src/lib/resource-type.ts
+new file mode 100644
+index 0000000..215c72f
+--- /dev/null
++++ b/src/lib/resource-type.ts
+@@ -0,0 +1,23 @@
++function parseSettings(value: unknown): Record<string, unknown> {
++  try {
++    const parsed = typeof value === "string" ? JSON.parse(value) : value;
++    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
++      ? parsed as Record<string, unknown>
++      : {};
++  } catch {
++    return {};
++  }
++}
++
++export function getRequiredResourceType(gameSlug: string, gameSettings: unknown) {
++  const settings = parseSettings(gameSettings);
++  const configured = String(settings.resourceType || "").trim().toLowerCase();
++  if (["table", "backgammon", "backgammon-table", "backgammon_table"].includes(configured)) {
++    return "backgammon_table";
++  }
++  if (["console", "playstation", "playstation5", "ps5"].includes(configured)) {
++    return "ps5";
++  }
++  if (configured) return configured;
++  return gameSlug.toLowerCase().includes("backgammon") ? "backgammon_table" : "ps5";
++}
+diff --git a/src/lib/tournament-engine.ts b/src/lib/tournament-engine.ts
+index 65e880b..c2e8f09 100644
+--- a/src/lib/tournament-engine.ts
++++ b/src/lib/tournament-engine.ts
+@@ -1175,174 +1175,6 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+   return { advanced: true, completed: false };
+ }
+ 
+-export async function scheduleTournamentMatches(tournamentId: number) {
+-  const connection = await db.getConnection();
+-  try {
+-    await connection.beginTransaction();
+-    const tournament = await loadTournament(connection, tournamentId);
+-    if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
+-    if (!tournament.venue_id) throw new Error("TOURNAMENT_VENUE_REQUIRED");
+-
+-    const settings = parseObject(tournament.game_settings);
+-    const duration = Math.round(safeNumber(
+-      settings.matchDurationMin ?? settings.durationMin,
+-      30,
+-      5,
+-      240
+-    ));
+-    const requiredType = String(
+-      settings.resourceType || (tournament.game_slug.includes("back") ? "table" : "ps5")
+-    ).toLowerCase();
+-    const [resourceRows] = await connection.query<Array<RowDataPacket & { id: number; type: string }>>(`
+-      SELECT id,type
+-      FROM resources
+-      WHERE venue_id=? AND is_active=1 AND status='available'
+-      ORDER BY id
+-      FOR UPDATE
+-    `, [tournament.venue_id]);
+-    const compatible = resourceRows.filter((row) => String(row.type).toLowerCase().includes(requiredType));
+-    const resources = compatible.length ? compatible : resourceRows;
+-    if (!resources.length) throw new Error("NO_RESOURCES");
+-
+-    const [matches] = await connection.query<Array<RowDataPacket & {
+-      id: number;
+-      round_number: number;
+-      stage: string;
+-      match_number: number;
+-    }>>(`
+-      SELECT m.id,COALESCE(r.round_number,1) AS round_number,
+-             COALESCE(r.stage,'round') AS stage,m.match_number
+-      FROM tournament_matches m
+-      LEFT JOIN tournament_rounds r ON r.id=m.round_id
+-      WHERE m.tournament_id=?
+-        AND m.status IN ('PENDING','READY')
+-        AND m.scheduled_at IS NULL
+-      ORDER BY COALESCE(r.round_number,1),COALESCE(r.stage,'round'),m.match_number
+-      FOR UPDATE
+-    `, [tournament.id]);
+-
+-    if (!matches.length) {
+-      await connection.commit();
+-      return { scheduled: 0, resources: resources.length, duration };
+-    }
+-
+-    const matchIds = matches.map((match) => Number(match.id));
+-    const placeholders = matchIds.map(() => "?").join(",");
+-    const [participantRows] = await connection.query<Array<RowDataPacket & {
+-      match_id: number;
+-      player_id: number | null;
+-      team_id: number | null;
+-    }>>(`
+-      SELECT match_id,player_id,team_id
+-      FROM match_participants
+-      WHERE match_id IN (${placeholders})
+-    `, matchIds);
+-    const matchParticipants = new Map<number, Set<string>>();
+-    for (const participant of participantRows) {
+-      const keys = matchParticipants.get(Number(participant.match_id)) || new Set<string>();
+-      keys.add(participantKey(participant.player_id, participant.team_id));
+-      matchParticipants.set(Number(participant.match_id), keys);
+-    }
+-
+-    const [existingRows] = await connection.query<Array<RowDataPacket & {
+-      id: number;
+-      resource_id: number | null;
+-      scheduled_at: Date;
+-      duration_min: number | null;
+-      player_id: number | null;
+-      team_id: number | null;
+-    }>>(`
+-      SELECT m.id,m.resource_id,m.scheduled_at,m.duration_min,mp.player_id,mp.team_id
+-      FROM tournament_matches m
+-      JOIN tournaments t ON t.id=m.tournament_id
+-      LEFT JOIN match_participants mp ON mp.match_id=m.id
+-      WHERE t.venue_id=?
+-        AND m.status NOT IN ('CANCELLED','COMPLETED')
+-        AND m.scheduled_at IS NOT NULL
+-    `, [tournament.venue_id]);
+-
+-    type BusyWindow = { start: number; end: number };
+-    const resourceBusy = new Map<number, BusyWindow[]>();
+-    const participantBusy = new Map<string, BusyWindow[]>();
+-    for (const row of existingRows) {
+-      const startAt = new Date(row.scheduled_at).getTime();
+-      const endAt = startAt + Number(row.duration_min || duration) * 60_000;
+-      if (row.resource_id) {
+-        const list = resourceBusy.get(Number(row.resource_id)) || [];
+-        list.push({ start: startAt, end: endAt });
+-        resourceBusy.set(Number(row.resource_id), list);
+-      }
+-      if (row.player_id || row.team_id) {
+-        const key = participantKey(row.player_id, row.team_id);
+-        const list = participantBusy.get(key) || [];
+-        list.push({ start: startAt, end: endAt });
+-        participantBusy.set(key, list);
+-      }
+-    }
+-
+-    const overlaps = (windows: BusyWindow[] | undefined, startAt: number, endAt: number) =>
+-      Boolean(windows?.some((window) => window.start < endAt && window.end > startAt));
+-
+-    let currentRoundKey = "";
+-    let roundStart = Math.max(new Date(tournament.starts_at).getTime(), Date.now());
+-    let roundEnd = roundStart;
+-    for (const match of matches) {
+-      const isGroup = String(match.stage).startsWith("group_");
+-      const roundKey = isGroup
+-        ? `groups:${match.round_number}`
+-        : `${match.stage}:${match.round_number}`;
+-      if (roundKey !== currentRoundKey) {
+-        if (currentRoundKey) roundStart = Math.max(roundStart + duration * 60_000, roundEnd);
+-        currentRoundKey = roundKey;
+-        roundEnd = roundStart;
+-      }
+-
+-      const participantKeys = matchParticipants.get(Number(match.id)) || new Set<string>();
+-      let candidateStart = roundStart;
+-      let selectedResource: number | null = null;
+-      for (let attempt = 0; attempt < 10_000 && selectedResource === null; attempt += 1) {
+-        const candidateEnd = candidateStart + duration * 60_000;
+-        const participantsAvailable = [...participantKeys].every(
+-          (key) => !overlaps(participantBusy.get(key), candidateStart, candidateEnd)
+-        );
+-        if (participantsAvailable) {
+-          const resource = resources.find(
+-            (item) => !overlaps(resourceBusy.get(Number(item.id)), candidateStart, candidateEnd)
+-          );
+-          if (resource) selectedResource = Number(resource.id);
+-        }
+-        if (selectedResource === null) candidateStart += duration * 60_000;
+-      }
+-      if (selectedResource === null) throw new Error("SCHEDULE_SLOT_NOT_FOUND");
+-
+-      const candidateEnd = candidateStart + duration * 60_000;
+-      await connection.execute(`
+-        UPDATE tournament_matches
+-        SET resource_id=?,scheduled_at=?,duration_min=?,status='READY'
+-        WHERE id=?
+-      `, [selectedResource, new Date(candidateStart), duration, match.id]);
+-
+-      const resourceWindows = resourceBusy.get(selectedResource) || [];
+-      resourceWindows.push({ start: candidateStart, end: candidateEnd });
+-      resourceBusy.set(selectedResource, resourceWindows);
+-      for (const key of participantKeys) {
+-        const windows = participantBusy.get(key) || [];
+-        windows.push({ start: candidateStart, end: candidateEnd });
+-        participantBusy.set(key, windows);
+-      }
+-      roundEnd = Math.max(roundEnd, candidateEnd);
+-    }
+-
+-    await connection.commit();
+-    return { scheduled: matches.length, resources: resources.length, duration };
+-  } catch (error) {
+-    await connection.rollback();
+-    throw error;
+-  } finally {
+-    connection.release();
+-  }
+-}
+-
+ function boardDateCondition(periodType: string, periodKey: string) {
+   if (periodType === "monthly" && /^\d{4}-\d{2}$/.test(periodKey)) {
+     return { sql: "AND DATE_FORMAT(m.completed_at,'%Y-%m')=?", params: [periodKey] };
+diff --git a/src/lib/tournament-participants.ts b/src/lib/tournament-participants.ts
+index 15013a9..459a23e 100644
+--- a/src/lib/tournament-participants.ts
++++ b/src/lib/tournament-participants.ts
+@@ -178,7 +178,7 @@ export async function inspectTournamentParticipants(
+         member.team_id,
+         COUNT(*) AS member_count,
+         GROUP_CONCAT(member.player_id ORDER BY member.player_id SEPARATOR ',') AS member_ids,
+-        GROUP_CONCAT(COALESCE(team_player.name,'بدون نام') ORDER BY member.id SEPARATOR '،') AS member_names
++        GROUP_CONCAT(COALESCE(team_player.name,'بدون نام') ORDER BY member.joined_at,member.player_id SEPARATOR '،') AS member_names
+       FROM team_members member
+       JOIN players team_player ON team_player.id=member.player_id
+       GROUP BY member.team_id
+diff --git a/src/lib/tournament-scheduling.ts b/src/lib/tournament-scheduling.ts
+new file mode 100644
+index 0000000..c5fa3f6
+--- /dev/null
++++ b/src/lib/tournament-scheduling.ts
+@@ -0,0 +1,437 @@
++import type { RowDataPacket } from "mysql2";
++import { db } from "@/lib/db";
++import { getRequiredResourceType } from "@/lib/resource-type";
++
++type ScheduleInput = {
++  mode: "preview" | "apply";
++  startAt: Date;
++  durationMin: number;
++  roundBreakMin: number;
++  participantRestMin: number;
++  assignReferees: boolean;
++};
++
++type BusyWindow = { start: number; end: number };
++
++type TournamentRow = RowDataPacket & {
++  id: number;
++  title: string;
++  status: string;
++  starts_at: Date;
++  ends_at: Date | null;
++  venue_id: number | null;
++  venue_title: string | null;
++  game_slug: string;
++  game_title: string;
++  game_settings: unknown;
++};
++
++type ResourceRow = RowDataPacket & {
++  id: number;
++  title: string;
++  type: string;
++};
++
++type RefereeRow = RowDataPacket & {
++  id: number;
++  name: string;
++};
++
++type MatchRow = RowDataPacket & {
++  id: number;
++  match_number: number;
++  status: string;
++  scheduled_at: Date | null;
++  duration_min: number | null;
++  referee_user_id: number | null;
++  round_number: number;
++  stage: string;
++  round_title: string;
++  home_name: string | null;
++  away_name: string | null;
++};
++
++type ParticipantRow = RowDataPacket & {
++  match_id: number;
++  player_id: number | null;
++  team_id: number | null;
++};
++
++type ExistingWindowRow = RowDataPacket & {
++  id: number;
++  resource_id: number | null;
++  referee_user_id: number | null;
++  scheduled_at: Date;
++  duration_min: number | null;
++  player_id: number | null;
++  team_id: number | null;
++};
++
++function parseObject(value: unknown): Record<string, unknown> {
++  try {
++    const parsed = typeof value === "string" ? JSON.parse(value) : value;
++    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
++      ? parsed as Record<string, unknown>
++      : {};
++  } catch {
++    return {};
++  }
++}
++
++function safeNumber(value: unknown, fallback: number, min: number, max: number) {
++  const number = Number(value);
++  return Number.isFinite(number) ? Math.max(min, Math.min(max, Math.round(number))) : fallback;
++}
++
++function participantKey(playerId: number | null, teamId: number | null) {
++  return playerId ? `p:${playerId}` : `t:${teamId}`;
++}
++
++function defaultDuration(tournament: TournamentRow) {
++  const settings = parseObject(tournament.game_settings);
++  return safeNumber(settings.matchDurationMin ?? settings.durationMin, 30, 5, 240);
++}
++
++function overlaps(windows: BusyWindow[] | undefined, start: number, end: number) {
++  return Boolean(windows?.some((window) => window.start < end && window.end > start));
++}
++
++async function loadTournament(connection: Awaited<ReturnType<typeof db.getConnection>>, tournamentId: number, lock = false) {
++  const [rows] = await connection.query<TournamentRow[]>(`
++    SELECT t.id,t.title,t.status,t.starts_at,t.ends_at,t.venue_id,
++           venue.title AS venue_title,g.slug AS game_slug,g.title AS game_title,t.game_settings
++    FROM tournaments t
++    JOIN games g ON g.id=t.game_id
++    LEFT JOIN venues venue ON venue.id=t.venue_id
++    WHERE t.id=? AND t.deleted_at IS NULL
++    LIMIT 1
++    ${lock ? "FOR UPDATE" : ""}
++  `, [tournamentId]);
++  return rows[0] || null;
++}
++
++async function loadResources(
++  connection: Awaited<ReturnType<typeof db.getConnection>>,
++  tournament: TournamentRow,
++  lock = false
++) {
++  if (!tournament.venue_id) return [];
++  const [rows] = await connection.query<ResourceRow[]>(`
++    SELECT id,title,type
++    FROM resources
++    WHERE venue_id=? AND is_active=1 AND status='available'
++    ORDER BY title,id
++    ${lock ? "FOR UPDATE" : ""}
++  `, [tournament.venue_id]);
++  const requiredType = getRequiredResourceType(tournament.game_slug, tournament.game_settings);
++  return rows.filter((row) => String(row.type).toLowerCase() === requiredType);
++}
++
++async function loadReferees(connection: Awaited<ReturnType<typeof db.getConnection>>) {
++  const [rows] = await connection.query<RefereeRow[]>(`
++    SELECT DISTINCT user.id,user.name
++    FROM users user
++    JOIN user_roles user_role ON user_role.user_id=user.id
++    JOIN roles role ON role.id=user_role.role_id
++    WHERE user.status='ACTIVE'
++      AND user.deleted_at IS NULL
++      AND role.name IN ('referee','operator','manager','super_admin')
++    ORDER BY user.name,user.id
++  `);
++  return rows;
++}
++
++async function loadMatches(
++  connection: Awaited<ReturnType<typeof db.getConnection>>,
++  tournamentId: number,
++  onlyUnscheduled: boolean,
++  lock = false
++) {
++  const [rows] = await connection.query<MatchRow[]>(`
++    SELECT match_item.id,match_item.match_number,match_item.status,match_item.scheduled_at,
++           match_item.duration_min,match_item.referee_user_id,
++           COALESCE(round_item.round_number,1) AS round_number,
++           COALESCE(round_item.stage,'round') AS stage,
++           COALESCE(round_item.title,'مرحله مسابقه') AS round_title,
++           COALESCE(home_team.title,home_player.name) AS home_name,
++           COALESCE(away_team.title,away_player.name) AS away_name
++    FROM tournament_matches match_item
++    LEFT JOIN tournament_rounds round_item ON round_item.id=match_item.round_id
++    LEFT JOIN match_participants home_participant
++      ON home_participant.match_id=match_item.id AND home_participant.slot=1
++    LEFT JOIN teams home_team ON home_team.id=home_participant.team_id
++    LEFT JOIN players home_player ON home_player.id=home_participant.player_id
++    LEFT JOIN match_participants away_participant
++      ON away_participant.match_id=match_item.id AND away_participant.slot=2
++    LEFT JOIN teams away_team ON away_team.id=away_participant.team_id
++    LEFT JOIN players away_player ON away_player.id=away_participant.player_id
++    WHERE match_item.tournament_id=?
++      ${onlyUnscheduled ? "AND match_item.status IN ('PENDING','READY') AND match_item.scheduled_at IS NULL" : ""}
++    ORDER BY COALESCE(round_item.round_number,1),COALESCE(round_item.stage,'round'),match_item.match_number
++    ${lock ? "FOR UPDATE" : ""}
++  `, [tournamentId]);
++  return rows;
++}
++
++export async function getTournamentScheduleOverview(tournamentId: number) {
++  const connection = await db.getConnection();
++  try {
++    const tournament = await loadTournament(connection, tournamentId);
++    if (!tournament) return null;
++    const [resources, referees, matches] = await Promise.all([
++      loadResources(connection, tournament),
++      loadReferees(connection),
++      loadMatches(connection, tournamentId, false)
++    ]);
++    const scheduled = matches.filter((match) => Boolean(match.scheduled_at));
++    const unscheduled = matches.filter(
++      (match) => !match.scheduled_at && ["PENDING", "READY"].includes(match.status)
++    );
++    return {
++      tournament: {
++        id: Number(tournament.id),
++        title: tournament.title,
++        status: tournament.status,
++        startsAt: new Date(tournament.starts_at).toISOString(),
++        endsAt: tournament.ends_at ? new Date(tournament.ends_at).toISOString() : null,
++        venueId: tournament.venue_id ? String(tournament.venue_id) : null,
++        venue: tournament.venue_title || null,
++        game: tournament.game_title,
++        resourceType: getRequiredResourceType(tournament.game_slug, tournament.game_settings)
++      },
++      defaults: {
++        durationMin: defaultDuration(tournament),
++        roundBreakMin: 10,
++        participantRestMin: 10,
++        startAt: new Date(Math.max(new Date(tournament.starts_at).getTime(), Date.now())).toISOString()
++      },
++      counts: {
++        total: matches.length,
++        scheduled: scheduled.length,
++        unscheduled: unscheduled.length,
++        completed: matches.filter((match) => match.status === "COMPLETED").length
++      },
++      resources: resources.map((resource) => ({
++        id: String(resource.id),
++        title: resource.title,
++        type: resource.type
++      })),
++      referees: referees.map((referee) => ({ id: String(referee.id), title: referee.name })),
++      matches: matches.map((match) => ({
++        id: String(match.id),
++        matchNumber: Number(match.match_number),
++        round: match.round_title,
++        status: match.status,
++        scheduledAt: match.scheduled_at ? new Date(match.scheduled_at).toISOString() : null,
++        durationMin: match.duration_min ? Number(match.duration_min) : null,
++        home: match.home_name || "در انتظار",
++        away: match.away_name || "در انتظار"
++      }))
++    };
++  } finally {
++    connection.release();
++  }
++}
++
++export async function planTournamentSchedule(tournamentId: number, input: ScheduleInput) {
++  const connection = await db.getConnection();
++  try {
++    await connection.beginTransaction();
++    const tournament = await loadTournament(connection, tournamentId, true);
++    if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
++    if (!["DRAW_READY", "RUNNING"].includes(tournament.status)) {
++      throw new Error("TOURNAMENT_NOT_READY_FOR_SCHEDULE");
++    }
++    if (!tournament.venue_id) throw new Error("TOURNAMENT_VENUE_REQUIRED");
++
++    const resources = await loadResources(connection, tournament, true);
++    if (!resources.length) throw new Error("NO_COMPATIBLE_RESOURCES");
++    const referees = await loadReferees(connection);
++    if (input.assignReferees && !referees.length) throw new Error("NO_REFEREES");
++
++    const matches = await loadMatches(connection, tournamentId, true, true);
++    if (!matches.length) {
++      if (input.mode === "apply") await connection.commit();
++      else await connection.rollback();
++      return { scheduled: 0, plan: [], resources: resources.length, referees: referees.length };
++    }
++
++    const matchIds = matches.map((match) => Number(match.id));
++    const placeholders = matchIds.map(() => "?").join(",");
++    const [participantRows] = await connection.query<ParticipantRow[]>(`
++      SELECT match_id,player_id,team_id
++      FROM match_participants
++      WHERE match_id IN (${placeholders})
++    `, matchIds);
++    const matchParticipants = new Map<number, Set<string>>();
++    for (const participant of participantRows) {
++      const keys = matchParticipants.get(Number(participant.match_id)) || new Set<string>();
++      keys.add(participantKey(participant.player_id, participant.team_id));
++      matchParticipants.set(Number(participant.match_id), keys);
++    }
++
++    const [existingRows] = await connection.query<ExistingWindowRow[]>(`
++      SELECT match_item.id,match_item.resource_id,match_item.referee_user_id,
++             match_item.scheduled_at,match_item.duration_min,
++             participant.player_id,participant.team_id
++      FROM tournament_matches match_item
++      LEFT JOIN match_participants participant ON participant.match_id=match_item.id
++      WHERE match_item.status NOT IN ('CANCELLED','COMPLETED')
++        AND match_item.scheduled_at IS NOT NULL
++    `);
++
++    const resourceBusy = new Map<number, BusyWindow[]>();
++    const participantBusy = new Map<string, BusyWindow[]>();
++    const refereeBusy = new Map<number, BusyWindow[]>();
++    for (const row of existingRows) {
++      const start = new Date(row.scheduled_at).getTime();
++      const end = start + Number(row.duration_min || input.durationMin) * 60_000;
++      if (row.resource_id) {
++        const list = resourceBusy.get(Number(row.resource_id)) || [];
++        list.push({ start, end });
++        resourceBusy.set(Number(row.resource_id), list);
++      }
++      if (row.referee_user_id) {
++        const list = refereeBusy.get(Number(row.referee_user_id)) || [];
++        list.push({ start, end });
++        refereeBusy.set(Number(row.referee_user_id), list);
++      }
++      if (row.player_id || row.team_id) {
++        const key = participantKey(row.player_id, row.team_id);
++        const list = participantBusy.get(key) || [];
++        list.push({ start, end: end + input.participantRestMin * 60_000 });
++        participantBusy.set(key, list);
++      }
++    }
++
++    const tournamentStart = new Date(tournament.starts_at).getTime();
++    const requestedStart = input.startAt.getTime();
++    if (!Number.isFinite(requestedStart)) throw new Error("INVALID_SCHEDULE_START");
++    let roundStart = Math.max(tournamentStart, requestedStart);
++    const hardEnd = tournament.ends_at
++      ? new Date(tournament.ends_at).getTime()
++      : roundStart + 14 * 24 * 60 * 60_000;
++    if (hardEnd <= roundStart) throw new Error("INVALID_TOURNAMENT_TIME_RANGE");
++
++    let currentRoundKey = "";
++    let roundEnd = roundStart;
++    const plan: Array<{
++      matchId: string;
++      matchNumber: number;
++      round: string;
++      home: string;
++      away: string;
++      scheduledAt: string;
++      durationMin: number;
++      resourceId: string;
++      resource: string;
++      refereeUserId: string | null;
++      referee: string | null;
++    }> = [];
++
++    for (const match of matches) {
++      const isGroup = String(match.stage).startsWith("group_");
++      const roundKey = isGroup
++        ? `groups:${match.round_number}`
++        : `${match.stage}:${match.round_number}`;
++      if (roundKey !== currentRoundKey) {
++        if (currentRoundKey) {
++          roundStart = Math.max(roundEnd + input.roundBreakMin * 60_000, roundStart);
++        }
++        currentRoundKey = roundKey;
++        roundEnd = roundStart;
++      }
++
++      const participantKeys = matchParticipants.get(Number(match.id)) || new Set<string>();
++      let candidateStart = roundStart;
++      let selectedResource: ResourceRow | null = null;
++      let selectedReferee: RefereeRow | null = null;
++
++      for (let attempt = 0; attempt < 20_000 && !selectedResource; attempt += 1) {
++        const candidateEnd = candidateStart + input.durationMin * 60_000;
++        if (candidateEnd > hardEnd) break;
++        const participantsAvailable = [...participantKeys].every(
++          (key) => !overlaps(participantBusy.get(key), candidateStart, candidateEnd)
++        );
++        if (participantsAvailable) {
++          selectedResource = resources.find(
++            (resource) => !overlaps(resourceBusy.get(Number(resource.id)), candidateStart, candidateEnd)
++          ) || null;
++          if (selectedResource) {
++            if (match.referee_user_id) {
++              const existingReferee = referees.find((referee) => Number(referee.id) === Number(match.referee_user_id));
++              if (!existingReferee || overlaps(refereeBusy.get(Number(existingReferee.id)), candidateStart, candidateEnd)) {
++                selectedResource = null;
++              } else {
++                selectedReferee = existingReferee;
++              }
++            } else if (input.assignReferees) {
++              selectedReferee = referees.find(
++                (referee) => !overlaps(refereeBusy.get(Number(referee.id)), candidateStart, candidateEnd)
++              ) || null;
++              if (!selectedReferee) selectedResource = null;
++            }
++          }
++        }
++        if (!selectedResource) candidateStart += 5 * 60_000;
++      }
++
++      if (!selectedResource) throw new Error("SCHEDULE_SLOT_NOT_FOUND");
++      const candidateEnd = candidateStart + input.durationMin * 60_000;
++      const resourceId = Number(selectedResource.id);
++      const refereeId = selectedReferee ? Number(selectedReferee.id) : null;
++
++      if (input.mode === "apply") {
++        await connection.execute(`
++          UPDATE tournament_matches
++          SET resource_id=?,referee_user_id=?,scheduled_at=?,duration_min=?,status='READY'
++          WHERE id=? AND scheduled_at IS NULL AND status IN ('PENDING','READY')
++        `, [resourceId, refereeId, new Date(candidateStart), input.durationMin, match.id]);
++      }
++
++      const resourceWindows = resourceBusy.get(resourceId) || [];
++      resourceWindows.push({ start: candidateStart, end: candidateEnd });
++      resourceBusy.set(resourceId, resourceWindows);
++      if (refereeId) {
++        const refereeWindows = refereeBusy.get(refereeId) || [];
++        refereeWindows.push({ start: candidateStart, end: candidateEnd });
++        refereeBusy.set(refereeId, refereeWindows);
++      }
++      for (const key of participantKeys) {
++        const windows = participantBusy.get(key) || [];
++        windows.push({ start: candidateStart, end: candidateEnd + input.participantRestMin * 60_000 });
++        participantBusy.set(key, windows);
++      }
++
++      plan.push({
++        matchId: String(match.id),
++        matchNumber: Number(match.match_number),
++        round: match.round_title,
++        home: match.home_name || "در انتظار",
++        away: match.away_name || "در انتظار",
++        scheduledAt: new Date(candidateStart).toISOString(),
++        durationMin: input.durationMin,
++        resourceId: String(resourceId),
++        resource: selectedResource.title,
++        refereeUserId: refereeId ? String(refereeId) : null,
++        referee: selectedReferee?.name || null
++      });
++      roundEnd = Math.max(roundEnd, candidateEnd);
++    }
++
++    if (input.mode === "apply") await connection.commit();
++    else await connection.rollback();
++
++    return {
++      scheduled: plan.length,
++      plan,
++      resources: resources.length,
++      referees: referees.length
++    };
++  } catch (error) {
++    await connection.rollback();
++    throw error;
++  } finally {
++    connection.release();
++  }
++}

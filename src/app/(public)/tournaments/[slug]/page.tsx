@@ -9,6 +9,7 @@ import {
   Trophy,
   Users
 } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -18,6 +19,7 @@ import { queryRows } from "@/lib/db";
 import { findTournament } from "@/lib/repositories/tournaments";
 import { formatToman } from "@/lib/utils";
 import { getRuntimeSettings } from "@/lib/runtime-settings";
+import { getTournamentCompletionSnapshot } from "@/lib/tournament-completion";
 
 
 type TournamentMatchRow = RowDataPacket & {
@@ -47,6 +49,10 @@ export default async function TournamentDetail({
 
   if (!item) notFound();
 
+  const completion = item.statusCode === "COMPLETED"
+    ? await getTournamentCompletionSnapshot(Number(item.id))
+    : null;
+
   const matches = await queryRows<TournamentMatchRow[]>(`
     SELECT
       m.id,m.match_number,m.status,m.scheduled_at,
@@ -70,7 +76,46 @@ export default async function TournamentDetail({
     LIMIT 200
   `, [Number(item.id)]);
 
-  const left = Math.max(0, item.capacity - item.registered);
+  const left = item.remainingCapacity;
+  const capacityUnit = item.participantType === "TEAM" ? "تیم" : "نفر";
+  const paymentEnabled = runtimeSettings.payment.cardToCard
+    || runtimeSettings.payment.pos
+    || runtimeSettings.payment.cash;
+  const now = Date.now();
+  const registrationStarted = !item.registrationStartsAt
+    || new Date(item.registrationStartsAt).getTime() <= now;
+  const registrationNotEnded = !item.registrationEndsAt
+    || new Date(item.registrationEndsAt).getTime() > now;
+  const tournamentNotStarted = new Date(item.startsAt).getTime() > now;
+  const registrationOpen = item.statusCode === "REGISTRATION_OPEN"
+    && registrationStarted
+    && registrationNotEnded
+    && tournamentNotStarted;
+  const capacityFull = left <= 0;
+
+  let registrationMessage = "";
+  if (!paymentEnabled) {
+    registrationMessage = "روش پرداخت فعالی برای این مسابقه تعریف نشده است.";
+  } else if (item.statusCode === "PUBLISHED" && !registrationStarted && item.registrationStartsAt) {
+    registrationMessage = `ثبت‌نام از ${new Intl.DateTimeFormat("fa-IR", {
+      dateStyle: "short",
+      timeStyle: "short"
+    }).format(new Date(item.registrationStartsAt))} آغاز می‌شود.`;
+  } else if (!registrationOpen) {
+    registrationMessage = item.statusCode === "REGISTRATION_CLOSED"
+      ? "مهلت ثبت‌نام این مسابقه پایان یافته است."
+      : item.statusCode === "RUNNING"
+        ? "این مسابقه در حال برگزاری است."
+        : item.statusCode === "COMPLETED"
+          ? "این مسابقه پایان یافته است."
+          : "ثبت‌نام این مسابقه در حال حاضر فعال نیست.";
+  } else if (capacityFull && !item.waitlistEnabled) {
+    registrationMessage = "ظرفیت این مسابقه تکمیل شده و صف انتظار فعال نیست.";
+  }
+
+  const showRegistrationForm = paymentEnabled
+    && registrationOpen
+    && (!capacityFull || item.waitlistEnabled);
 
   return (
     <div className="page-shell">
@@ -96,13 +141,24 @@ export default async function TournamentDetail({
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_400px]">
         <div className="grid gap-6">
+          {completion?.champion && (
+            <Card className="border-amber-500/30 bg-amber-500/5 p-6 text-center">
+              <Trophy className="mx-auto text-amber-500" size={38} />
+              <p className="mt-3 text-xs text-[var(--muted)]">قهرمان نهایی مسابقه</p>
+              <h2 className="mt-1 text-2xl font-black">{completion.champion.name}</h2>
+              {completion.runnerUp && (
+                <p className="mt-2 text-sm text-[var(--muted)]">نایب‌قهرمان: {completion.runnerUp.name}</p>
+              )}
+            </Card>
+          )}
+
           <Card className="p-6">
             <h2 className="text-xl font-black">اطلاعات مسابقه</h2>
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <Info
                 icon={<Users />}
                 title="ظرفیت"
-                value={`${item.registered.toLocaleString("fa-IR")} از ${item.capacity.toLocaleString("fa-IR")} نفر`}
+                value={`${item.registered.toLocaleString("fa-IR")} از ${item.capacity.toLocaleString("fa-IR")} ${capacityUnit}`}
               />
               <Info icon={<Trophy />} title="جایزه" value={item.prize} />
               <Info icon={<Clock3 />} title="نوع شرکت" value={item.participantMode} />
@@ -159,19 +215,33 @@ export default async function TournamentDetail({
           <Card className="p-6">
             <div className="flex items-end justify-between">
               <div>
-                <p className="text-xs text-[var(--muted)]">هزینه ثبت‌نام هر نفر</p>
+                <p className="text-xs text-[var(--muted)]">هزینه ثبت‌نام هر {capacityUnit}</p>
                 <strong className="mt-1 block text-xl">{formatToman(item.price)}</strong>
               </div>
               <span className="text-sm font-black text-[var(--brand)]">
-                {left.toLocaleString("fa-IR")} ظرفیت باقی‌مانده
+                {left.toLocaleString("fa-IR")} {capacityUnit} باقی‌مانده
               </span>
             </div>
             <div className="my-5 h-px bg-[var(--line)]" />
-            <RegisterTournamentForm
-              tournament={item}
-              initialUser={user ? { name: user.name, mobile: user.mobile } : null}
-              paymentSettings={runtimeSettings.payment}
-            />
+            {registrationMessage && <Alert tone={capacityFull ? "warning" : "info"}>
+              {registrationMessage}
+            </Alert>}
+            {capacityFull && item.waitlistEnabled && registrationOpen && (
+              <Alert tone="warning" className={registrationMessage ? "mt-3" : ""}>
+                ظرفیت تکمیل شده است؛ می‌توانید اطلاعات خود را وارد و مستقیماً وارد صف انتظار شوید.
+              </Alert>
+            )}
+            {showRegistrationForm && (
+              <div className={registrationMessage || capacityFull ? "mt-5" : ""}>
+                <RegisterTournamentForm
+                  tournament={item}
+                  initialUser={user ? { name: user.name, mobile: user.mobile } : null}
+                  paymentSettings={runtimeSettings.payment}
+                  holdMinutes={runtimeSettings.registration.holdMinutes}
+                  capacityFull={capacityFull}
+                />
+              </div>
+            )}
           </Card>
           <Button variant="secondary"><Share2 size={17} />اشتراک‌گذاری مسابقه</Button>
         </aside>

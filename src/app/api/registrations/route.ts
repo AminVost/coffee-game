@@ -63,6 +63,7 @@ type TournamentRow = RowDataPacket & {
   capacity: number;
   reservation_expires_min: number;
   status: string;
+  starts_at: Date;
 };
 
 type CountRow = RowDataPacket & {
@@ -205,13 +206,23 @@ export async function POST(request: Request) {
         }
 
         return NextResponse.json({
-          message: "مهلت ۱۵ دقیقه‌ای رزرو ظرفیت به پایان رسیده است. دوباره ظرفیت را رزرو کنید.",
+          message: "مهلت رزرو موقت ظرفیت به پایان رسیده است. دوباره ظرفیت را رزرو کنید.",
           expired: true
         }, { status: 410 });
       }
 
+      const currentPlayers = parsePlayerData(hold.player_data);
+      const preliminaryMobiles = preliminaryPlayers.map((player) => player.mobile);
+      const currentMobiles = currentPlayers.map((player) => player.mobile);
+      if (JSON.stringify(currentMobiles) !== JSON.stringify(preliminaryMobiles)) {
+        await connection.rollback();
+        return NextResponse.json({
+          message: "اطلاعات شرکت‌کنندگان رزرو موقت تغییر کرده است؛ دوباره ظرفیت را رزرو کنید."
+        }, { status: 409 });
+      }
+
       const [tournamentRows] = await connection.query<TournamentRow[]>(`
-        SELECT id,title,capacity,reservation_expires_min,status
+        SELECT id,title,capacity,reservation_expires_min,status,starts_at
         FROM tournaments
         WHERE id=? AND deleted_at IS NULL
         LIMIT 1
@@ -224,12 +235,15 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
       }
 
-      if (tournament.status !== "REGISTRATION_OPEN") {
+      if (
+        tournament.status !== "REGISTRATION_OPEN"
+        || new Date(tournament.starts_at).getTime() <= Date.now()
+      ) {
         await connection.rollback();
         return NextResponse.json({ message: "ثبت‌نام این مسابقه فعال نیست." }, { status: 409 });
       }
 
-      const players = parsePlayerData(hold.player_data);
+      const players = currentPlayers;
       if (!players.length) {
         await connection.rollback();
         return NextResponse.json({ message: "اطلاعات شرکت‌کنندگان نامعتبر است." }, { status: 409 });

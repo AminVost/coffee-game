@@ -11,7 +11,7 @@ export const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "border border-transparent bg-[var(--brand)] text-white shadow-[0_14px_32px_color-mix(in_srgb,var(--brand)_25%,transparent)] hover:-translate-y-0.5 hover:bg-[var(--brand-strong)] hover:shadow-[0_18px_38px_color-mix(in_srgb,var(--brand)_30%,transparent)]",
+          "border border-transparent bg-[var(--brand)] text-white hover:-translate-y-0.5 hover:bg-[var(--brand-strong)]",
         secondary:
           "border border-[var(--line)] bg-[var(--surface)] text-[var(--text)] shadow-sm hover:-translate-y-0.5 hover:border-[color-mix(in_srgb,var(--brand)_40%,var(--line))] hover:bg-[var(--surface-2)]",
         outline:
@@ -21,7 +21,7 @@ export const buttonVariants = cva(
         ghost:
           "border border-transparent bg-transparent text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]",
         danger:
-          "border border-transparent bg-red-600 text-white shadow-[0_12px_28px_rgba(220,38,38,.18)] hover:-translate-y-0.5 hover:bg-red-700",
+          "border border-transparent bg-red-600 text-white hover:-translate-y-0.5 hover:bg-red-700",
         dangerSoft:
           "border border-red-500/15 bg-red-500/10 text-red-500 hover:bg-red-500/15"
       },

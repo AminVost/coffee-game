@@ -3,6 +3,11 @@ import { z } from "zod";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { getSession } from "@/lib/auth";
 import { db, queryRows } from "@/lib/db";
+import {
+  acquirePlayerMobileLocks,
+  releasePlayerMobileLocks
+} from "@/lib/player-identity";
+import { expireStaleRegistrationState } from "@/lib/registration-flow";
 import { getAvailableSlots, newWaitlistPublicId } from "@/lib/waitlist";
 import { assertPaymentMethodEnabled } from "@/lib/runtime-settings";
 
@@ -82,7 +87,21 @@ export async function GET() {
 
   const rows = await queryRows<RowDataPacket[]>(`
     SELECT
-      w.id,w.public_id,w.status,w.position,w.slots,w.amount,w.offer_token,
+      w.id,w.public_id,w.status,w.position,
+      CASE
+        WHEN w.status='WAITING' THEN 1 + (
+          SELECT COUNT(*)
+          FROM waitlist_entries earlier
+          WHERE earlier.tournament_id=w.tournament_id
+            AND earlier.status='WAITING'
+            AND (
+              earlier.position<w.position
+              OR (earlier.position=w.position AND earlier.id<w.id)
+            )
+        )
+        ELSE w.position
+      END AS current_position,
+      w.slots,w.amount,w.offer_token,
       w.offered_at,w.offer_expires_at,w.created_at,w.tournament_id,
       w.existing_team_id,t.title AS tournament_title,t.slug
     FROM waitlist_entries w
@@ -106,10 +125,22 @@ export async function POST(request: Request) {
     const input = schema.parse(await request.json());
     await assertPaymentMethodEnabled(input.paymentMethod);
     const userId = Number(user.id);
+    const requestedPlayers = input.players.map((player) => ({
+      name: player.name.trim(),
+      mobile: player.mobile.trim()
+    }));
+    const requestedMobiles = requestedPlayers.map((player) => player.mobile);
+    if (new Set(requestedMobiles).size !== requestedMobiles.length) {
+      return NextResponse.json({ message: "هر شماره موبایل را فقط یک‌بار وارد کنید." }, { status: 409 });
+    }
+
     const connection = await db.getConnection();
+    let mobileLocks: string[] = [];
 
     try {
+      mobileLocks = await acquirePlayerMobileLocks(connection, requestedMobiles);
       await connection.beginTransaction();
+      await expireStaleRegistrationState(connection);
 
       const [rows] = await connection.query<TournamentRow[]>(`
         SELECT
@@ -139,10 +170,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: "صف انتظار برای این مسابقه غیرفعال است." }, { status: 409 });
       }
 
-      let players = input.players.map((player) => ({
-        name: player.name.trim(),
-        mobile: player.mobile.trim()
-      }));
+      let players = requestedPlayers;
       let teamTitle = input.teamTitle?.trim() || null;
       let existingTeamId: number | null = null;
 
@@ -158,10 +186,17 @@ export async function POST(request: Request) {
           return NextResponse.json({ message: "فقط کاپیتان می‌تواند این تیم را وارد صف کند." }, { status: 403 });
         }
 
-        players = ownedTeam.members.map((member) => ({
+        const currentPlayers = ownedTeam.members.map((member) => ({
           name: member.name,
           mobile: member.mobile!
         }));
+        if (JSON.stringify(currentPlayers.map((player) => player.mobile)) !== JSON.stringify(requestedMobiles)) {
+          await connection.rollback();
+          return NextResponse.json({
+            message: "ترکیب تیم تغییر کرده است؛ فرم را تازه‌سازی و دوباره تلاش کنید."
+          }, { status: 409 });
+        }
+        players = currentPlayers;
         teamTitle = ownedTeam.team.title;
         existingTeamId = ownedTeam.team.id;
       }
@@ -225,13 +260,29 @@ export async function POST(request: Request) {
           )
           OR EXISTS (
             SELECT 1
+            FROM registration_holds rh
+            WHERE rh.tournament_id=?
+              AND rh.status='ACTIVE'
+              AND rh.expires_at>NOW()
+              AND JSON_SEARCH(rh.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
+          )
+          OR EXISTS (
+            SELECT 1
             FROM waitlist_entries w
             WHERE w.tournament_id=?
               AND w.status IN ('WAITING','OFFERED')
               AND JSON_SEARCH(w.player_data,'one',?,NULL,'$[*].mobile') IS NOT NULL
           )
           LIMIT 1
-        `, [tournament.id, mobile, mobile, tournament.id, mobile]);
+        `, [
+          tournament.id,
+          mobile,
+          mobile,
+          tournament.id,
+          mobile,
+          tournament.id,
+          mobile
+        ]);
 
         if (duplicates[0]) {
           await connection.rollback();
@@ -279,6 +330,7 @@ export async function POST(request: Request) {
       await connection.rollback();
       throw error;
     } finally {
+      await releasePlayerMobileLocks(connection, mobileLocks);
       connection.release();
     }
   } catch (error) {
@@ -291,6 +343,12 @@ export async function POST(request: Request) {
 
     if (error instanceof Error && error.message === "PAYMENT_METHOD_DISABLED") {
       return NextResponse.json({ message: "این روش پرداخت غیرفعال است." }, { status: 409 });
+    }
+
+    if (error instanceof Error && error.message === "PLAYER_IDENTITY_LOCK_TIMEOUT") {
+      return NextResponse.json({
+        message: "درخواست دیگری برای یکی از این شماره‌ها در حال پردازش است. دوباره تلاش کنید."
+      }, { status: 409 });
     }
 
     if (error instanceof Error && error.message === "TEAM_MEMBER_MOBILE_REQUIRED") {

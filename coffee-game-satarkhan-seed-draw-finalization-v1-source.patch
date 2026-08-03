@@ -1,0 +1,389 @@
+diff --git a/src/app/api/admin/tournaments/[id]/draw/route.ts b/src/app/api/admin/tournaments/[id]/draw/route.ts
+index 78eb069..b2e2adb 100644
+--- a/src/app/api/admin/tournaments/[id]/draw/route.ts
++++ b/src/app/api/admin/tournaments/[id]/draw/route.ts
+@@ -10,6 +10,7 @@ import {
+   regenerateTournamentDraw,
+   resetTournamentDraw
+ } from "@/lib/tournament-engine";
++import { inspectTournamentParticipants } from "@/lib/tournament-participants";
+ 
+ const participantKeySchema = z.string().regex(/^(p|t):\d+$/);
+ const pairingSchema = z.object({
+@@ -43,6 +44,12 @@ const messages: Record<string, string> = {
+   MANUAL_DRAW_UNKNOWN_PARTICIPANT: "یکی از شرکت‌کنندگان قرعه دستی متعلق به این مسابقه نیست.",
+   MANUAL_DRAW_DUPLICATE_PARTICIPANT: "یک شرکت‌کننده بیش از یک بار در قرعه دستی قرار گرفته است.",
+   MANUAL_DRAW_MISSING_PARTICIPANT: "همه شرکت‌کنندگان باید دقیقاً یک بار در قرعه دستی قرار بگیرند.",
++  MANUAL_DRAW_INVALID_BRACKET_SIZE: "تعداد بازی‌های دور اول با اندازه استاندارد براکت هماهنگ نیست.",
++  MANUAL_DRAW_REQUIRED: "برای این نوع قرعه باید ترتیب یا Pairing دستی را مشخص کنید.",
++  SEEDED_DRAW_REQUIRES_ALL_SEEDS: "برای قرعه Seed شده باید برای همه شرکت‌کنندگان Seed تعیین شود.",
++  SEEDED_DRAW_SEEDS_MUST_BE_CONTIGUOUS: "Seedها باید بدون فاصله و از ۱ تا تعداد شرکت‌کنندگان باشند.",
++  INVALID_SEED_PAYLOAD: "فهرست Seedهای ارسالی کامل یا معتبر نیست.",
++  SEEDS_ONLY_FOR_SEEDED_DRAW: "Seed بندی فقط برای مسابقه‌ای با روش قرعه Seed شده قابل ویرایش است.",
+   DRAW_RESET_LOCKED: "پس از شروع یا تکمیل یک بازی، حذف یا قرعه مجدد مجاز نیست.",
+   DRAW_HAS_DISPUTES: "برای بازی‌های این قرعه اعتراض ثبت شده و حذف قرعه مجاز نیست.",
+   DOUBLE_ELIMINATION_STATE_INVALID: "وضعیت براکت دوحذفی ناسازگار است."
+@@ -115,15 +122,28 @@ type MatchRow = RowDataPacket & {
+   away_name: string | null;
+   home_seed: number | null;
+   away_seed: number | null;
++  started_at: Date | null;
++  completed_at: Date | null;
++  participant_count: number;
++  has_dispute: number;
+ };
+ 
++async function loadParticipantInspection(id: number) {
++  const connection = await db.getConnection();
++  try {
++    return await inspectTournamentParticipants(connection, id);
++  } finally {
++    connection.release();
++  }
++}
++
+ export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+   const auth = await authorize("draws.manage");
+   if (auth.response) return auth.response;
+   const id = await tournamentId(params);
+   if (!id) return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
+ 
+-  const [tournamentRows, participants, matches] = await Promise.all([
++  const [tournamentRows, participants, matches, inspection] = await Promise.all([
+     queryRows<TournamentInfo[]>(`
+       SELECT id,title,status,format,draw_mode,min_participants,participant_type
+       FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1
+@@ -151,7 +171,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
+              WHEN away.team_id IS NOT NULL THEN CONCAT('t:',away.team_id) END AS away_key,
+         COALESCE(home_team.title,home_player.name) AS home_name,
+         COALESCE(away_team.title,away_player.name) AS away_name,
+-        home.seed AS home_seed,away.seed AS away_seed
++        home.seed AS home_seed,away.seed AS away_seed,
++        match_row.started_at,match_row.completed_at,
++        (SELECT COUNT(*) FROM match_participants participant_count WHERE participant_count.match_id=match_row.id) AS participant_count,
++        EXISTS(SELECT 1 FROM match_disputes dispute WHERE dispute.match_id=match_row.id) AS has_dispute
+       FROM tournament_rounds round
+       JOIN tournament_matches match_row ON match_row.round_id=round.id
+       LEFT JOIN match_participants home ON home.match_id=match_row.id AND home.slot=1
+@@ -162,7 +185,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
+       LEFT JOIN players away_player ON away_player.id=away.player_id
+       WHERE round.tournament_id=?
+       ORDER BY round.round_number,round.stage,match_row.match_number
+-    `, [id])
++    `, [id]),
++    loadParticipantInspection(id)
+   ]);
+ 
+   const tournament = tournamentRows[0];
+@@ -205,7 +229,23 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
+       homeSeed: match.home_seed === null ? null : Number(match.home_seed),
+       awaySeed: match.away_seed === null ? null : Number(match.away_seed)
+     })),
+-    canReset: !matches.some((match) => ["LIVE", "COMPLETED"].includes(match.status)),
++    readyForDraw: Boolean(inspection?.readyForDraw),
++    blockers: inspection?.blockers || [],
++    canReset: !matches.some((match) => (
++      match.status === "LIVE"
++      || Boolean(match.started_at)
++      || (match.status === "COMPLETED" && Number(match.participant_count) >= 2)
++      || Boolean(match.has_dispute)
++    )),
++    resetBlockedReason: matches.some((match) => Boolean(match.has_dispute))
++      ? "برای یکی از بازی‌ها اعتراض ثبت شده است."
++      : matches.some((match) => (
++          match.status === "LIVE"
++          || Boolean(match.started_at)
++          || (match.status === "COMPLETED" && Number(match.participant_count) >= 2)
++        ))
++        ? "حداقل یک بازی شروع یا تکمیل شده است."
++        : null,
+     drawExists: matches.length > 0
+   });
+ }
+@@ -220,28 +260,58 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+   try {
+     const input = seedSchema.parse(await request.json());
+     await connection.beginTransaction();
++
++    const [tournaments] = await connection.query<Array<RowDataPacket & {
++      id: number;
++      status: string;
++      draw_mode: string;
++    }>>(`
++      SELECT id,status,draw_mode
++      FROM tournaments
++      WHERE id=? AND deleted_at IS NULL
++      LIMIT 1
++      FOR UPDATE
++    `, [id]);
++    const tournament = tournaments[0];
++    if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
++    if (tournament.status !== "REGISTRATION_CLOSED") {
++      throw new Error("TOURNAMENT_NOT_READY_FOR_DRAW");
++    }
++    if (tournament.draw_mode !== "seeded") {
++      throw new Error("SEEDS_ONLY_FOR_SEEDED_DRAW");
++    }
++
++    const inspection = await inspectTournamentParticipants(connection, id);
++    if (!inspection?.readyForDraw) throw new Error("PARTICIPANTS_NOT_FINALIZED");
++
+     const [existingDraw] = await connection.query<RowDataPacket[]>(`
+       SELECT id FROM tournament_matches WHERE tournament_id=? LIMIT 1 FOR UPDATE
+     `, [id]);
+     if (existingDraw[0]) throw new Error("DRAW_ALREADY_EXISTS");
+ 
+-    const [entries] = await connection.query<Array<RowDataPacket & { id: number; seed: number | null }>>(`
+-      SELECT re.id,re.seed
++    const [entries] = await connection.query<Array<RowDataPacket & { id: number }>>(`
++      SELECT re.id
+       FROM registration_entries re
+       JOIN registrations registration ON registration.id=re.registration_id
+       WHERE registration.tournament_id=?
+         AND registration.deleted_at IS NULL
+         AND registration.status IN ('CONFIRMED','CHECKED_IN')
++      ORDER BY re.id
+       FOR UPDATE
+     `, [id]);
+     const entryIds = new Set(entries.map((entry) => Number(entry.id)));
+-    if (input.seeds.some((item) => !entryIds.has(item.entryId))) {
+-      throw new Error("MANUAL_DRAW_UNKNOWN_PARTICIPANT");
++    const submittedIds = new Set(input.seeds.map((item) => item.entryId));
++    if (
++      input.seeds.length !== entries.length
++      || submittedIds.size !== entries.length
++      || input.seeds.some((item) => !entryIds.has(item.entryId))
++    ) {
++      throw new Error("INVALID_SEED_PAYLOAD");
+     }
+ 
+-    const nextSeeds = new Map(entries.map((entry) => [Number(entry.id), entry.seed === null ? null : Number(entry.seed)]));
+-    input.seeds.forEach((item) => nextSeeds.set(item.entryId, item.seed));
+-    const values = [...nextSeeds.values()].filter((seed): seed is number => seed !== null);
++    const values = input.seeds
++      .map((item) => item.seed)
++      .filter((seed): seed is number => seed !== null);
+     if (new Set(values).size !== values.length) throw new Error("DUPLICATE_SEED");
+ 
+     for (const item of input.seeds) {
+diff --git a/src/components/admin/draw-manager.tsx b/src/components/admin/draw-manager.tsx
+index ad2c82f..569dd1b 100644
+--- a/src/components/admin/draw-manager.tsx
++++ b/src/components/admin/draw-manager.tsx
+@@ -50,7 +50,10 @@ type DrawData = {
+   };
+   participants: Participant[];
+   matches: Match[];
++  readyForDraw: boolean;
++  blockers: Array<{ code: string; message: string }>;
+   canReset: boolean;
++  resetBlockedReason: string | null;
+   drawExists: boolean;
+ };
+ 
+@@ -71,6 +74,12 @@ function nextPowerOfTwo(value: number) {
+   return size;
+ }
+ 
++const drawModeLabels = {
++  random: "تصادفی",
++  seeded: "Seed شده",
++  custom: "دستی"
++} as const;
++
+ export function DrawManager({ tournamentId }: { tournamentId: string }) {
+   const [data, setData] = useState<DrawData | null>(null);
+   const [loading, setLoading] = useState(true);
+@@ -153,6 +162,18 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
+ 
+   async function run(action: "preview" | "generate" | "regenerate") {
+     if (!data) return;
++    if (data.tournament.drawMode === "seeded" && !seedComplete) {
++      setError(`برای قرعه Seed شده، Seedها باید دقیقاً از ۱ تا ${data.participants.length.toLocaleString("fa-IR")} تکمیل شوند.`);
++      return;
++    }
++    if (action === "generate" && !preview) {
++      setError("ابتدا پیش‌نمایش قرعه را بسازید و سپس همان پیش‌نمایش را ثبت کنید.");
++      return;
++    }
++    if (action === "regenerate" && !window.confirm("قرعه فعلی حذف و یک قرعه تصادفی جدید ساخته شود؟")) {
++      return;
++    }
++
+     setBusy(action); setError(""); setMessage("");
+     const body: Record<string, unknown> = { action };
+     if (data.tournament.drawMode === "custom") {
+@@ -163,7 +184,6 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
+       }
+     } else if (preview && action !== "preview") {
+       body.participantOrder = preview.orderedKeys;
+-      if (["knockout", "double"].includes(preview.category)) body.pairings = preview.pairings;
+     }
+     const response = await fetch(`/api/admin/tournaments/${tournamentId}/draw`, {
+       method: "POST",
+@@ -175,7 +195,7 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
+     if (!response.ok) return setError(payload.message || "عملیات قرعه انجام نشد.");
+     if (action === "preview") {
+       setPreview(payload);
+-      return setMessage("پیش‌نمایش ساخته شد؛ با تأیید نهایی همین Pairing ذخیره می‌شود.");
++      return setMessage("پیش‌نمایش ساخته شد؛ ثبت نهایی دقیقاً همین ترتیب را ذخیره می‌کند.");
+     }
+     setPreview(null);
+     setMessage(action === "regenerate" ? "قرعه با موفقیت بازسازی شد." : "قرعه با موفقیت ثبت شد.");
+@@ -213,7 +233,15 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
+   if (loading && !data) return <Card className="mt-7 p-10 text-center text-[var(--muted)]">در حال دریافت اطلاعات قرعه...</Card>;
+   if (!data) return <Alert tone="error" className="mt-6">{error || "اطلاعات مسابقه دریافت نشد."}</Alert>;
+ 
+-  const canCreate = data.tournament.status === "REGISTRATION_CLOSED" && data.participants.length >= data.tournament.minimumParticipants;
++  const seedNumbers = data.participants
++    .map((participant) => Number(seedDraft[participant.key]))
++    .filter((seed) => Number.isInteger(seed) && seed > 0)
++    .sort((left, right) => left - right);
++  const seedComplete = data.tournament.drawMode !== "seeded" || (
++    seedNumbers.length === data.participants.length
++    && seedNumbers.every((seed, index) => seed === index + 1)
++  );
++  const canCreate = data.readyForDraw && seedComplete;
+ 
+   return <div className="mt-7 grid gap-6">
+     {error && <Alert tone="error">{error}</Alert>}
+@@ -221,14 +249,18 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
+ 
+     <Card className="p-5 sm:p-7">
+       <div className="flex flex-wrap items-start justify-between gap-4">
+-        <div><h2 className="text-xl font-black">{data.tournament.title}</h2><p className="mt-2 text-sm text-[var(--muted)]">{data.tournament.format} · روش قرعه: {data.tournament.drawMode} · وضعیت: {data.tournament.status}</p></div>
++        <div><h2 className="text-xl font-black">{data.tournament.title}</h2><p className="mt-2 text-sm text-[var(--muted)]">{data.tournament.format} · روش قرعه: {drawModeLabels[data.tournament.drawMode]} · وضعیت: {data.tournament.status}</p></div>
+         <div className="rounded-2xl bg-[var(--surface-2)] px-4 py-3 text-sm"><b>{data.participants.length.toLocaleString("fa-IR")}</b> شرکت‌کننده تأییدشده · حداقل {data.tournament.minimumParticipants.toLocaleString("fa-IR")}</div>
+       </div>
+-      {!canCreate && !data.drawExists && <Alert tone="warning" className="mt-5">برای ساخت قرعه، وضعیت مسابقه باید `REGISTRATION_CLOSED` باشد و تعداد شرکت‌کنندگان به حداقل تعیین‌شده برسد.</Alert>}
++      {!data.drawExists && !data.readyForDraw && <div className="mt-5 grid gap-2">{data.blockers.length
++        ? data.blockers.map((blocker) => <Alert key={blocker.code} tone="warning">{blocker.message}</Alert>)
++        : <Alert tone="warning">فهرست شرکت‌کنندگان هنوز برای قرعه نهایی نشده است.</Alert>}
++      </div>}
++      {!data.drawExists && data.tournament.drawMode === "seeded" && !seedComplete && <Alert tone="warning" className="mt-5">Seedها باید کامل، یکتا و بدون فاصله از ۱ تا {data.participants.length.toLocaleString("fa-IR")} باشند.</Alert>}
+     </Card>
+ 
+-    {!data.drawExists && <Card className="p-5 sm:p-7">
+-      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">Seed بندی شرکت‌کنندگان</h2><p className="mt-1 text-xs text-[var(--muted)]">Seedهای کمتر در موقعیت‌های استاندارد براکت قرار می‌گیرند و Seedهای برتر در دور اول مقابل هم قرار نمی‌گیرند.</p></div><div className="flex gap-2"><Button type="button" variant="secondary" size="sm" onClick={autoSeed}><WandSparkles size={15}/>Seed خودکار</Button><Button type="button" size="sm" loading={busy === "seeds"} onClick={saveSeeds}><Save size={15}/>ذخیره Seed</Button></div></div>
++    {!data.drawExists && data.tournament.drawMode === "seeded" && <Card className="p-5 sm:p-7">
++      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">Seed بندی شرکت‌کنندگان</h2><p className="mt-1 text-xs text-[var(--muted)]">Seedهای کمتر در موقعیت‌های استاندارد براکت قرار می‌گیرند و Seedهای برتر در دور اول مقابل هم قرار نمی‌گیرند.</p></div><div className="flex gap-2"><Button type="button" variant="secondary" size="sm" disabled={!data.readyForDraw} onClick={autoSeed}><WandSparkles size={15}/>Seed خودکار</Button><Button type="button" size="sm" disabled={!data.readyForDraw} loading={busy === "seeds"} onClick={saveSeeds}><Save size={15}/>ذخیره Seed</Button></div></div>
+       <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{data.participants.map((participant) => <div key={participant.key} className="grid grid-cols-[1fr_90px] items-center gap-3 rounded-2xl border border-[var(--line)] p-3"><div className="min-w-0"><strong className="block truncate">{participant.name}</strong><span className="text-xs text-[var(--muted)]" dir="ltr">{participant.mobile || participant.key}</span></div><Input type="number" min="1" max="5000" placeholder="Seed" value={seedDraft[participant.key] || ""} onChange={(event) => { setSeedDraft((current) => ({ ...current, [participant.key]: event.target.value })); setPreview(null); }}/></div>)}</div>
+     </Card>}
+ 
+@@ -242,10 +274,10 @@ export function DrawManager({ tournamentId }: { tournamentId: string }) {
+     </Card>}
+ 
+     {!data.drawExists && <Card className="p-5 sm:p-7">
+-      <div className="flex flex-wrap gap-3"><Button type="button" variant="secondary" loading={busy === "preview"} disabled={!canCreate} onClick={() => run("preview")}><Dices size={17}/>پیش‌نمایش قرعه</Button><Button type="button" loading={busy === "generate"} disabled={!canCreate} onClick={() => run("generate")}><Shuffle size={17}/>ثبت نهایی قرعه</Button></div>
++      <div className="flex flex-wrap gap-3"><Button type="button" variant="secondary" loading={busy === "preview"} disabled={!canCreate} onClick={() => run("preview")}><Dices size={17}/>پیش‌نمایش قرعه</Button><Button type="button" loading={busy === "generate"} disabled={!canCreate || !preview} onClick={() => run("generate")}><Shuffle size={17}/>ثبت همین پیش‌نمایش</Button></div>
+       {preview && <div className="mt-6"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="font-black">{preview.pairings.length ? "پیش‌نمایش دور اول" : "پیش‌نمایش ترتیب شرکت‌کنندگان"}</h3>{preview.pairings.length ? <span className="text-xs text-[var(--muted)]">اندازه براکت: {preview.bracketSize.toLocaleString("fa-IR")}</span> : null}</div>{preview.warnings?.map((warning) => <Alert key={warning} tone="warning" className="mb-3">{warning}</Alert>)}{preview.pairings.length ? <div className="grid gap-3 md:grid-cols-2">{preview.pairings.map((pairing, index) => <div key={index} className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-center"><strong>{pairing.homeKey ? participantByKey.get(pairing.homeKey)?.name : "استراحت"}</strong><span className="text-xs text-[var(--muted)]">VS</span><strong>{pairing.awayKey ? participantByKey.get(pairing.awayKey)?.name : "استراحت"}</strong></div>)}</div> : <div className="grid gap-2 md:grid-cols-2">{preview.orderedKeys.map((key, index) => <div key={key} className="flex items-center gap-3 rounded-2xl bg-[var(--surface-2)] p-3"><span className="grid h-8 w-8 place-items-center rounded-xl bg-[var(--brand)]/12 text-xs font-black text-[var(--brand)]">{(index + 1).toLocaleString("fa-IR")}</span><strong>{participantByKey.get(key)?.name}</strong></div>)}</div>}</div>}
+     </Card>}
+ 
+-    {data.drawExists && <Card className="p-5 sm:p-7"><div className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">براکت ثبت‌شده</h2><p className="mt-1 text-xs text-[var(--muted)]">Reset و قرعه مجدد فقط پیش از شروع یا تکمیل بازی‌ها امکان‌پذیر است.</p></div><div className="flex gap-2">{data.canReset && data.tournament.drawMode !== "custom" && <Button type="button" variant="secondary" loading={busy === "regenerate"} onClick={() => run("regenerate")}><RefreshCcw size={16}/>قرعه مجدد</Button>}{data.canReset && <Button type="button" variant="dangerSoft" loading={busy === "reset"} onClick={reset}><Trash2 size={16}/>حذف قرعه</Button>}</div></div><TournamentBracket matches={data.matches}/></Card>}
++    {data.drawExists && <Card className="p-5 sm:p-7"><div className="mb-6 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black">براکت ثبت‌شده</h2><p className="mt-1 text-xs text-[var(--muted)]">حذف یا قرعه مجدد فقط پیش از شروع بازی‌ها امکان‌پذیر است.</p></div><div className="flex gap-2">{data.canReset && data.tournament.drawMode === "random" && <Button type="button" variant="secondary" loading={busy === "regenerate"} onClick={() => run("regenerate")}><RefreshCcw size={16}/>قرعه تصادفی مجدد</Button>}{data.canReset && <Button type="button" variant="dangerSoft" loading={busy === "reset"} onClick={reset}><Trash2 size={16}/>حذف قرعه</Button>}</div></div>{!data.canReset && data.resetBlockedReason && <Alert tone="warning" className="mb-5">{data.resetBlockedReason}</Alert>}<TournamentBracket matches={data.matches}/></Card>}
+   </div>;
+ }
+diff --git a/src/lib/draw-planner.ts b/src/lib/draw-planner.ts
+index 143b6ac..7433f47 100644
+--- a/src/lib/draw-planner.ts
++++ b/src/lib/draw-planner.ts
+@@ -78,6 +78,10 @@ export function validateManualPairings<T extends BracketParticipant>(
+   const used = new Set<string>();
+ 
+   if (!pairings.length) throw new Error("MANUAL_DRAW_EMPTY");
++  const expectedPairingCount = nextPowerOfTwo(participants.length) / 2;
++  if (pairings.length !== expectedPairingCount) {
++    throw new Error("MANUAL_DRAW_INVALID_BRACKET_SIZE");
++  }
+   for (const pairing of pairings) {
+     if (!pairing.homeKey && !pairing.awayKey) throw new Error("MANUAL_DRAW_EMPTY_PAIR");
+     for (const key of [pairing.homeKey, pairing.awayKey]) {
+@@ -106,7 +110,7 @@ export function planKnockout<T extends BracketParticipant>(
+     ));
+     const slots = pairings.flatMap((pairing) => [pairing.homeKey, pairing.awayKey]);
+     return {
+-      bracketSize: nextPowerOfTwo(slots.length),
++      bracketSize: nextPowerOfTwo(participants.length),
+       orderedKeys: slots.filter((key): key is string => Boolean(key)),
+       slots,
+       pairings,
+diff --git a/src/lib/tournament-engine.ts b/src/lib/tournament-engine.ts
+index 9026c36..65e880b 100644
+--- a/src/lib/tournament-engine.ts
++++ b/src/lib/tournament-engine.ts
+@@ -697,19 +697,41 @@ function participantsFromOrder(participants: Participant[], orderedKeys: string[
+   });
+ }
+ 
++function validateCompleteSeeds(participants: Participant[]) {
++  const seeds = participants.map((participant) => participant.seed);
++  if (seeds.some((seed) => seed === null)) {
++    throw new Error("SEEDED_DRAW_REQUIRES_ALL_SEEDS");
++  }
++  const ordered = [...(seeds as number[])].sort((left, right) => left - right);
++  if (ordered.some((seed, index) => seed !== index + 1)) {
++    throw new Error("SEEDED_DRAW_SEEDS_MUST_BE_CONTIGUOUS");
++  }
++}
++
+ function buildInitialPlan(
+   tournament: TournamentRow,
+   participants: Participant[],
+   options: TournamentDrawOptions = {}
+ ) {
+   const category = formatCategory(tournament.format);
+-  const knockoutPlan = planKnockout(participants, drawMode(tournament.draw_mode), {
++  const mode = drawMode(tournament.draw_mode);
++  const pairingCategory = category === "knockout" || category === "double";
++
++  if (mode === "seeded") validateCompleteSeeds(participants);
++  if (mode === "custom" && pairingCategory && !options.manualPairings) {
++    throw new Error("MANUAL_DRAW_REQUIRED");
++  }
++  if (mode === "custom" && !pairingCategory && !options.participantOrder) {
++    throw new Error("MANUAL_DRAW_REQUIRED");
++  }
++
++  const knockoutPlan = planKnockout(participants, mode, {
+     participantOrder: options.participantOrder,
+-    manualPairings: category === "knockout" || category === "double"
++    manualPairings: mode === "custom" && pairingCategory
+       ? options.manualPairings
+       : undefined
+   });
+-  const plan = category === "knockout" || category === "double"
++  const plan = pairingCategory
+     ? knockoutPlan
+     : { ...knockoutPlan, slots: knockoutPlan.orderedKeys, pairings: [] };
+   return {
+@@ -806,10 +828,17 @@ async function createInitialDraw(
+ 
+ async function resetDrawInTransaction(connection: PoolConnection, tournamentId: number) {
+   const [lockedMatches] = await connection.query<RowDataPacket[]>(`
+-    SELECT id
+-    FROM tournament_matches
+-    WHERE tournament_id=?
+-      AND (status IN ('LIVE','COMPLETED') OR started_at IS NOT NULL OR completed_at IS NOT NULL)
++    SELECT match_row.id
++    FROM tournament_matches match_row
++    WHERE match_row.tournament_id=?
++      AND (
++        match_row.status='LIVE'
++        OR match_row.started_at IS NOT NULL
++        OR (
++          match_row.status='COMPLETED'
++          AND (SELECT COUNT(*) FROM match_participants participant WHERE participant.match_id=match_row.id) >= 2
++        )
++      )
+     LIMIT 1
+     FOR UPDATE
+   `, [tournamentId]);
+@@ -854,6 +883,8 @@ export async function previewTournamentDraw(
+     if (participants.length < Math.max(2, Number(tournament.min_participants || 2))) {
+       throw new Error("MINIMUM_PARTICIPANTS_NOT_REACHED");
+     }
++    const inspection = await inspectTournamentParticipants(connection, tournament.id);
++    if (!inspection?.readyForDraw) throw new Error("PARTICIPANTS_NOT_FINALIZED");
+     const { category, plan } = buildInitialPlan(tournament, participants, options);
+     await connection.rollback();
+     return {

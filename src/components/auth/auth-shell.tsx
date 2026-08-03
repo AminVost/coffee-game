@@ -28,7 +28,7 @@ export function AuthShell({
         className="absolute -bottom-36 -left-28 -z-10 h-[400px] w-[400px] rounded-full bg-amber-400/15 blur-[120px]"
       />
 
-      <div className="mx-auto grid min-h-[calc(100vh-24px)] w-full max-w-6xl overflow-hidden rounded-[2rem] border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-float)] lg:grid-cols-[.93fr_1.07fr] sm:min-h-[calc(100vh-40px)]">
+      <div className="mx-auto grid min-h-[calc(100vh-24px)] w-full max-w-6xl overflow-hidden rounded-[2rem] border border-[var(--line)] bg-[var(--surface)] lg:grid-cols-[.93fr_1.07fr] sm:min-h-[calc(100vh-40px)]">
         <section
           className="flex flex-col p-6 sm:p-9 lg:p-12"
         >

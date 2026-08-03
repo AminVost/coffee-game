@@ -1,0 +1,1170 @@
+diff --git a/src/app/(public)/page.tsx b/src/app/(public)/page.tsx
+index 3310760..2dca7e4 100644
+--- a/src/app/(public)/page.tsx
++++ b/src/app/(public)/page.tsx
+@@ -69,13 +69,13 @@ export default async function HomePage() {
+               icon: Users,
+               title: "ثبت‌نام فردی و تیمی",
+               text: "یک یا چند سهم بخرید، اعضای تیم را دعوت کنید و اطلاعات مهمان‌ها را بدون سردرگمی مدیریت کنید.",
+-              tone: "bg-emerald-500/12 text-emerald-500"
++              tone: "bg-[var(--brand-soft)] text-[var(--brand)]"
+             },
+             {
+               icon: Sparkles,
+               title: "قرعه‌کشی منعطف",
+               text: "قرعه تصادفی، Seed شده یا کاملاً سفارشی با نمایش جذاب روی موبایل و نمایشگر مجموعه.",
+-              tone: "bg-amber-500/12 text-amber-500"
++              tone: "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-[var(--accent)]"
+             },
+             {
+               icon: CheckCircle2,
+diff --git a/src/app/api/admin/settings/route.ts b/src/app/api/admin/settings/route.ts
+index 9114f17..9817e61 100644
+--- a/src/app/api/admin/settings/route.ts
++++ b/src/app/api/admin/settings/route.ts
+@@ -1,30 +1,190 @@
+-import { revalidatePath, revalidateTag } from "next/cache";
+-import { NextResponse } from "next/server";
+-import { z } from "zod";
+-import type { RowDataPacket } from "mysql2";
+-import { authorize } from "@/lib/authorization";
+-import { writeAuditLog } from "@/lib/audit";
+-import { execute, queryRows } from "@/lib/db";
+-import { env } from "@/lib/env";
+-
+-const schema=z.object({
+- club:z.object({name:z.string().trim().min(2).max(160),phone:z.string().trim().max(30),address:z.string().trim().max(500)}),
+- auth:z.object({admin2fa:z.enum(["optional","required"]),sessionDays:z.number().int().min(1).max(90)}),
+- otp:z.object({ttlMinutes:z.number().int().min(2).max(30),cooldownSeconds:z.number().int().min(10).max(600),hourlyLimit:z.number().int().min(1).max(30),ipHourlyLimit:z.number().int().min(1).max(100),maxAttempts:z.number().int().min(1).max(10)}),
+- registration:z.object({holdMinutes:z.number().int().min(5).max(120),correctionHours:z.number().int().min(1).max(168),waitlistOfferMinutes:z.number().int().min(5).max(1440)}),
+- home:z.object({tournamentsLimit:z.number().int().min(1).max(12),liveMatchesLimit:z.number().int().min(1).max(12)}),
+- payment:z.object({cash:z.boolean(),pos:z.boolean(),receipt:z.boolean(),partial:z.boolean()}),
+- notification:z.object({inApp:z.boolean(),email:z.boolean(),sms:z.enum(["disabled","optional","required"])})
+-});
+-type SettingRow=RowDataPacket&{key:string;value:unknown};
+-function parse(value:unknown){try{return typeof value==='string'?JSON.parse(value):value}catch{return null}}
+-export async function GET(){const auth=await authorize("settings.manage");if(auth.response)return auth.response;const rows=await queryRows<SettingRow[]>(`SELECT \`key\`,value FROM app_settings WHERE \`key\` IN ('club.profile','auth.settings','payment.settings','notification.settings','registration.settings','otp.settings','home.settings')`);const map=Object.fromEntries(rows.map(r=>[r.key,parse(r.value)]));return NextResponse.json({item:{
+- club:map['club.profile']||{name:'کافه گیم ستارخان',phone:'',address:''},
+- auth:{admin2fa:map['auth.settings']?.admin2fa==='required'?'required':'optional',sessionDays:Number(map['auth.settings']?.sessionDays||env.sessionDays)},
+- otp:{ttlMinutes:Number(map['otp.settings']?.ttlMinutes||env.smsOtpTtlMinutes),cooldownSeconds:Number(map['otp.settings']?.cooldownSeconds||env.smsOtpCooldownSeconds),hourlyLimit:Number(map['otp.settings']?.hourlyLimit||env.smsOtpHourlyLimit),ipHourlyLimit:Number(map['otp.settings']?.ipHourlyLimit||env.smsOtpIpHourlyLimit),maxAttempts:Number(map['otp.settings']?.maxAttempts||env.smsOtpMaxAttempts)},
+- registration:{holdMinutes:Number(map['registration.settings']?.holdMinutes||15),correctionHours:Number(map['registration.settings']?.correctionHours||24),waitlistOfferMinutes:Number(map['registration.settings']?.waitlistOfferMinutes||30)},
+- home:{tournamentsLimit:Number(map['home.settings']?.tournamentsLimit||3),liveMatchesLimit:Number(map['home.settings']?.liveMatchesLimit||4)},
+- payment:{cash:map['payment.settings']?.cash!==false,pos:map['payment.settings']?.pos!==false,receipt:map['payment.settings']?.receipt!==false,partial:map['payment.settings']?.partial===true},
+- notification:{inApp:map['notification.settings']?.inApp!==false,email:map['notification.settings']?.email===true,sms:['optional','required'].includes(map['notification.settings']?.sms)?map['notification.settings'].sms:'disabled'}
+-}})}
+-export async function PUT(request:Request){const auth=await authorize("settings.manage");if(auth.response)return auth.response;try{const input=schema.parse(await request.json());const settings:Array<[string,unknown,number]>=[["club.profile",input.club,1],["auth.settings",{password:true,sms:true,google:false,...input.auth},0],["otp.settings",input.otp,0],["registration.settings",input.registration,0],["home.settings",input.home,1],["payment.settings",{provider:"manual_transfer",...input.payment},0],["notification.settings",input.notification,0]];for(const[key,value,isPublic]of settings)await execute(`INSERT INTO app_settings(\`key\`,value,is_public,updated_at) VALUES(?,?,?,NOW()) ON DUPLICATE KEY UPDATE value=VALUES(value),is_public=VALUES(is_public),updated_at=NOW()`,[key,JSON.stringify(value),isPublic]);revalidateTag("home-page","max");revalidatePath("/");await writeAuditLog({actorUserId:auth.user.id,action:"settings.updated",entityType:"app_settings",entityId:"main",newData:input,request});return NextResponse.json({ok:true,item:input});}catch(error){if(error instanceof z.ZodError)return NextResponse.json({message:"تنظیمات واردشده معتبر نیست.",errors:error.issues},{status:422});console.error(error);return NextResponse.json({message:"ذخیره تنظیمات انجام نشد."},{status:500});}}
++import { revalidatePath, revalidateTag } from "next/cache";
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import type { RowDataPacket } from "mysql2";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import { execute, queryRows } from "@/lib/db";
++import { env } from "@/lib/env";
++import { DEFAULT_THEME_PALETTE, normalizeThemePalette } from "@/lib/theme-palettes";
++
++const paletteSchema = z.enum([
++  "indigo-violet",
++  "ocean-cyan",
++  "royal-purple",
++  "sunset-coral",
++  "graphite-gold",
++  "emerald-gold"
++]);
++
++const schema = z.object({
++  club: z.object({
++    name: z.string().trim().min(2).max(160),
++    phone: z.string().trim().max(30),
++    address: z.string().trim().max(500)
++  }),
++  auth: z.object({
++    admin2fa: z.enum(["optional", "required"]),
++    sessionDays: z.number().int().min(1).max(90)
++  }),
++  otp: z.object({
++    ttlMinutes: z.number().int().min(2).max(30),
++    cooldownSeconds: z.number().int().min(10).max(600),
++    hourlyLimit: z.number().int().min(1).max(30),
++    ipHourlyLimit: z.number().int().min(1).max(100),
++    maxAttempts: z.number().int().min(1).max(10)
++  }),
++  registration: z.object({
++    holdMinutes: z.number().int().min(5).max(120),
++    correctionHours: z.number().int().min(1).max(168),
++    waitlistOfferMinutes: z.number().int().min(5).max(1440)
++  }),
++  home: z.object({
++    tournamentsLimit: z.number().int().min(1).max(12),
++    liveMatchesLimit: z.number().int().min(1).max(12)
++  }),
++  appearance: z.object({
++    experimentalEnabled: z.boolean(),
++    palette: paletteSchema
++  }),
++  payment: z.object({
++    cash: z.boolean(),
++    pos: z.boolean(),
++    receipt: z.boolean(),
++    partial: z.boolean()
++  }),
++  notification: z.object({
++    inApp: z.boolean(),
++    email: z.boolean(),
++    sms: z.enum(["disabled", "optional", "required"])
++  })
++});
++
++type SettingRow = RowDataPacket & { key: string; value: unknown };
++
++function parse(value: unknown) {
++  try {
++    return typeof value === "string" ? JSON.parse(value) : value;
++  } catch {
++    return null;
++  }
++}
++
++export async function GET() {
++  const auth = await authorize("settings.manage");
++  if (auth.response) return auth.response;
++
++  const rows = await queryRows<SettingRow[]>(`
++    SELECT \`key\`, value
++    FROM app_settings
++    WHERE \`key\` IN (
++      'club.profile',
++      'auth.settings',
++      'payment.settings',
++      'notification.settings',
++      'registration.settings',
++      'otp.settings',
++      'home.settings',
++      'appearance.settings'
++    )
++  `);
++  const map = Object.fromEntries(rows.map((row) => [row.key, parse(row.value)]));
++  const appearance = map["appearance.settings"] ?? {};
++
++  return NextResponse.json({
++    item: {
++      club: map["club.profile"] || { name: "کافه گیم ستارخان", phone: "", address: "" },
++      auth: {
++        admin2fa: map["auth.settings"]?.admin2fa === "required" ? "required" : "optional",
++        sessionDays: Number(map["auth.settings"]?.sessionDays || env.sessionDays)
++      },
++      otp: {
++        ttlMinutes: Number(map["otp.settings"]?.ttlMinutes || env.smsOtpTtlMinutes),
++        cooldownSeconds: Number(map["otp.settings"]?.cooldownSeconds || env.smsOtpCooldownSeconds),
++        hourlyLimit: Number(map["otp.settings"]?.hourlyLimit || env.smsOtpHourlyLimit),
++        ipHourlyLimit: Number(map["otp.settings"]?.ipHourlyLimit || env.smsOtpIpHourlyLimit),
++        maxAttempts: Number(map["otp.settings"]?.maxAttempts || env.smsOtpMaxAttempts)
++      },
++      registration: {
++        holdMinutes: Number(map["registration.settings"]?.holdMinutes || 15),
++        correctionHours: Number(map["registration.settings"]?.correctionHours || 24),
++        waitlistOfferMinutes: Number(map["registration.settings"]?.waitlistOfferMinutes || 30)
++      },
++      home: {
++        tournamentsLimit: Number(map["home.settings"]?.tournamentsLimit || 3),
++        liveMatchesLimit: Number(map["home.settings"]?.liveMatchesLimit || 4)
++      },
++      appearance: {
++        experimentalEnabled: appearance.experimentalEnabled === true,
++        palette: normalizeThemePalette(appearance.palette || DEFAULT_THEME_PALETTE)
++      },
++      payment: {
++        cash: map["payment.settings"]?.cash !== false,
++        pos: map["payment.settings"]?.pos !== false,
++        receipt: map["payment.settings"]?.receipt !== false,
++        partial: map["payment.settings"]?.partial === true
++      },
++      notification: {
++        inApp: map["notification.settings"]?.inApp !== false,
++        email: map["notification.settings"]?.email === true,
++        sms: ["optional", "required"].includes(map["notification.settings"]?.sms)
++          ? map["notification.settings"].sms
++          : "disabled"
++      }
++    }
++  });
++}
++
++export async function PUT(request: Request) {
++  const auth = await authorize("settings.manage");
++  if (auth.response) return auth.response;
++
++  try {
++    const input = schema.parse(await request.json());
++    const settings: Array<[string, unknown, number]> = [
++      ["club.profile", input.club, 1],
++      ["auth.settings", { password: true, sms: true, google: false, ...input.auth }, 0],
++      ["otp.settings", input.otp, 0],
++      ["registration.settings", input.registration, 0],
++      ["home.settings", input.home, 1],
++      ["appearance.settings", input.appearance, 1],
++      ["payment.settings", { provider: "manual_transfer", ...input.payment }, 0],
++      ["notification.settings", input.notification, 0]
++    ];
++
++    for (const [key, value, isPublic] of settings) {
++      await execute(
++        `INSERT INTO app_settings(\`key\`,value,is_public,updated_at)
++         VALUES(?,?,?,NOW())
++         ON DUPLICATE KEY UPDATE
++           value=VALUES(value),
++           is_public=VALUES(is_public),
++           updated_at=NOW()`,
++        [key, JSON.stringify(value), isPublic]
++      );
++    }
++
++    revalidateTag("home-page", "max");
++    revalidateTag("appearance-theme", "max");
++    revalidatePath("/");
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: "settings.updated",
++      entityType: "app_settings",
++      entityId: "main",
++      newData: input,
++      request
++    });
++
++    return NextResponse.json({ ok: true, item: input });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json(
++        { message: "تنظیمات واردشده معتبر نیست.", errors: error.issues },
++        { status: 422 }
++      );
++    }
++    console.error(error);
++    return NextResponse.json({ message: "ذخیره تنظیمات انجام نشد." }, { status: 500 });
++  }
++}
+diff --git a/src/app/api/theme/route.ts b/src/app/api/theme/route.ts
+new file mode 100644
+index 0000000..bdd7e77
+--- /dev/null
++++ b/src/app/api/theme/route.ts
+@@ -0,0 +1,14 @@
++import { NextResponse } from "next/server";
++import { getActiveThemePalette } from "@/lib/theme-settings";
++
++export async function GET() {
++  const palette = await getActiveThemePalette();
++  return NextResponse.json(
++    { palette },
++    {
++      headers: {
++        "Cache-Control": "public, max-age=60, stale-while-revalidate=300"
++      }
++    }
++  );
++}
+diff --git a/src/app/globals.css b/src/app/globals.css
+index b45cf1c..4406d23 100644
+--- a/src/app/globals.css
++++ b/src/app/globals.css
+@@ -1,6 +1,196 @@
+ @import "tailwindcss";
+ 
+-:root {
++/*
++ * Flat palette system.
++ * Only CSS variables change; components and layout stay untouched.
++ * The default palette is indigo-violet. Experimental alternatives are
++ * activated by data-palette on the <html> element.
++ */
++:root,
++html[data-palette="indigo-violet"] {
++  --bg: #f6f7fb;
++  --surface: #ffffff;
++  --surface-elevated: #ffffff;
++  --surface-2: #eef0f8;
++  --surface-3: #e6e9f5;
++  --text: #111827;
++  --muted: #64748b;
++  --line: rgba(30, 41, 59, 0.09);
++  --line-strong: rgba(30, 41, 59, 0.16);
++  --brand: #4f46e5;
++  --brand-strong: #3730a3;
++  --brand-soft: rgba(79, 70, 229, 0.11);
++  --accent: #8b5cf6;
++  --gold: var(--accent);
++  --danger: #dc2626;
++  --brand-contrast: #ffffff;
++  --shadow-card: 0 20px 55px rgba(49, 46, 129, 0.08);
++  --shadow-float: 0 28px 90px rgba(49, 46, 129, 0.14);
++}
++
++.dark,
++.dark[data-palette="indigo-violet"] {
++  --bg: #0b1020;
++  --surface: #12182a;
++  --surface-elevated: #171f35;
++  --surface-2: #1b2440;
++  --surface-3: #222c4b;
++  --text: #f8fafc;
++  --muted: #9aa8c2;
++  --line: rgba(255, 255, 255, 0.075);
++  --line-strong: rgba(255, 255, 255, 0.14);
++  --brand: #818cf8;
++  --brand-strong: #a78bfa;
++  --brand-soft: rgba(129, 140, 248, 0.13);
++  --accent: #c084fc;
++  --gold: var(--accent);
++  --danger: #f05252;
++  --brand-contrast: #0b1020;
++  --shadow-card: 0 22px 65px rgba(0, 0, 0, 0.24);
++  --shadow-float: 0 32px 100px rgba(0, 0, 0, 0.36);
++}
++
++html[data-palette="ocean-cyan"] {
++  --bg: #f3f8fb;
++  --surface: #ffffff;
++  --surface-elevated: #ffffff;
++  --surface-2: #eaf4f8;
++  --surface-3: #deedf3;
++  --text: #10212b;
++  --muted: #607887;
++  --line: rgba(15, 55, 72, 0.09);
++  --line-strong: rgba(15, 55, 72, 0.16);
++  --brand: #0284c7;
++  --brand-strong: #0369a1;
++  --brand-soft: rgba(2, 132, 199, 0.11);
++  --accent: #06b6d4;
++  --gold: var(--accent);
++  --shadow-card: 0 20px 55px rgba(3, 105, 161, 0.08);
++  --shadow-float: 0 28px 90px rgba(3, 105, 161, 0.14);
++}
++
++.dark[data-palette="ocean-cyan"] {
++  --bg: #06151f;
++  --surface: #0b202c;
++  --surface-elevated: #102938;
++  --surface-2: #143344;
++  --surface-3: #193d50;
++  --text: #f0f9ff;
++  --muted: #8fb5c7;
++  --brand: #38bdf8;
++  --brand-strong: #67e8f9;
++  --brand-soft: rgba(56, 189, 248, 0.13);
++  --accent: #22d3ee;
++  --gold: var(--accent);
++  --brand-contrast: #06202b;
++}
++
++html[data-palette="royal-purple"] {
++  --bg: #f8f5fc;
++  --surface: #ffffff;
++  --surface-elevated: #ffffff;
++  --surface-2: #f1ebf8;
++  --surface-3: #e9def3;
++  --text: #21142d;
++  --muted: #74627f;
++  --line: rgba(52, 24, 70, 0.09);
++  --line-strong: rgba(52, 24, 70, 0.16);
++  --brand: #7c3aed;
++  --brand-strong: #5b21b6;
++  --brand-soft: rgba(124, 58, 237, 0.11);
++  --accent: #db2777;
++  --gold: var(--accent);
++  --shadow-card: 0 20px 55px rgba(91, 33, 182, 0.08);
++  --shadow-float: 0 28px 90px rgba(91, 33, 182, 0.14);
++}
++
++.dark[data-palette="royal-purple"] {
++  --bg: #120b1c;
++  --surface: #1c1228;
++  --surface-elevated: #241734;
++  --surface-2: #2d1d40;
++  --surface-3: #38254d;
++  --text: #fbf7ff;
++  --muted: #b7a0c6;
++  --brand: #a78bfa;
++  --brand-strong: #c4b5fd;
++  --brand-soft: rgba(167, 139, 250, 0.13);
++  --accent: #f472b6;
++  --gold: var(--accent);
++  --brand-contrast: #1b1028;
++}
++
++html[data-palette="sunset-coral"] {
++  --bg: #fbf6f2;
++  --surface: #ffffff;
++  --surface-elevated: #ffffff;
++  --surface-2: #f7ece4;
++  --surface-3: #f1dfd2;
++  --text: #2b1911;
++  --muted: #7f685d;
++  --line: rgba(70, 35, 20, 0.09);
++  --line-strong: rgba(70, 35, 20, 0.16);
++  --brand: #ea580c;
++  --brand-strong: #c2410c;
++  --brand-soft: rgba(234, 88, 12, 0.11);
++  --accent: #f59e0b;
++  --gold: var(--accent);
++  --shadow-card: 0 20px 55px rgba(154, 52, 18, 0.08);
++  --shadow-float: 0 28px 90px rgba(154, 52, 18, 0.14);
++}
++
++.dark[data-palette="sunset-coral"] {
++  --bg: #1a0f0a;
++  --surface: #251711;
++  --surface-elevated: #301e16;
++  --surface-2: #3b251b;
++  --surface-3: #482e20;
++  --text: #fff8f2;
++  --muted: #c7a995;
++  --brand: #fb923c;
++  --brand-strong: #fdba74;
++  --brand-soft: rgba(251, 146, 60, 0.13);
++  --accent: #fbbf24;
++  --gold: var(--accent);
++  --brand-contrast: #241209;
++}
++
++html[data-palette="graphite-gold"] {
++  --bg: #f5f6f8;
++  --surface: #ffffff;
++  --surface-elevated: #ffffff;
++  --surface-2: #eceff3;
++  --surface-3: #e2e6eb;
++  --text: #111827;
++  --muted: #667085;
++  --line: rgba(15, 23, 42, 0.09);
++  --line-strong: rgba(15, 23, 42, 0.16);
++  --brand: #475569;
++  --brand-strong: #1e293b;
++  --brand-soft: rgba(71, 85, 105, 0.11);
++  --accent: #d4a017;
++  --gold: var(--accent);
++  --shadow-card: 0 20px 55px rgba(15, 23, 42, 0.08);
++  --shadow-float: 0 28px 90px rgba(15, 23, 42, 0.14);
++}
++
++.dark[data-palette="graphite-gold"] {
++  --bg: #0f1218;
++  --surface: #171b23;
++  --surface-elevated: #1d222c;
++  --surface-2: #252b36;
++  --surface-3: #2e3542;
++  --text: #f8fafc;
++  --muted: #a1aab8;
++  --brand: #94a3b8;
++  --brand-strong: #cbd5e1;
++  --brand-soft: rgba(148, 163, 184, 0.13);
++  --accent: #f5c451;
++  --gold: var(--accent);
++  --brand-contrast: #11151b;
++}
++
++html[data-palette="emerald-gold"] {
+   --bg: #f4f7f5;
+   --surface: #ffffff;
+   --surface-elevated: #ffffff;
+@@ -13,13 +203,13 @@
+   --brand: #0f9f5c;
+   --brand-strong: #087a43;
+   --brand-soft: rgba(15, 159, 92, 0.11);
+-  --gold: #ca941c;
+-  --danger: #dc2626;
++  --accent: #ca941c;
++  --gold: var(--accent);
+   --shadow-card: 0 20px 55px rgba(24, 48, 35, 0.08);
+   --shadow-float: 0 28px 90px rgba(20, 45, 31, 0.14);
+ }
+ 
+-.dark {
++.dark[data-palette="emerald-gold"] {
+   --bg: #07100c;
+   --surface: #0d1813;
+   --surface-elevated: #112019;
+@@ -27,15 +217,12 @@
+   --surface-3: #1a2c23;
+   --text: #f4f8f5;
+   --muted: #91a49a;
+-  --line: rgba(255, 255, 255, 0.075);
+-  --line-strong: rgba(255, 255, 255, 0.14);
+   --brand: #20c878;
+   --brand-strong: #32da8a;
+   --brand-soft: rgba(32, 200, 120, 0.12);
+-  --gold: #efbd45;
+-  --danger: #f05252;
+-  --shadow-card: 0 22px 65px rgba(0, 0, 0, 0.22);
+-  --shadow-float: 0 32px 100px rgba(0, 0, 0, 0.35);
++  --accent: #efbd45;
++  --gold: var(--accent);
++  --brand-contrast: #07100c;
+ }
+ 
+ * {
+@@ -449,3 +636,8 @@ html {
+     max-width: calc(100vw - 20px);
+   }
+ }
++
++/* Palette-aware dark showcase used by the home hero. */
++.theme-showcase-frame {
++  background: linear-gradient(135deg, var(--brand), #111827 52%, var(--accent));
++}
+diff --git a/src/app/layout.tsx b/src/app/layout.tsx
+index c5424ed..4fc2679 100644
+--- a/src/app/layout.tsx
++++ b/src/app/layout.tsx
+@@ -13,7 +13,7 @@ export const metadata: Metadata = {
+ };
+ 
+ export const viewport: Viewport = {
+-  themeColor: "#07100c",
++  themeColor: "#0b1020",
+   width: "device-width",
+   initialScale: 1,
+   maximumScale: 1
+@@ -22,6 +22,13 @@ export const viewport: Viewport = {
+ export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+   return (
+     <html lang="fa" dir="rtl" suppressHydrationWarning>
++      <head>
++        <script
++          dangerouslySetInnerHTML={{
++            __html: `(function(){try{var p=localStorage.getItem("coffee-game-theme-palette-v1");if(p)document.documentElement.dataset.palette=p;else document.documentElement.dataset.palette="indigo-violet"}catch(e){document.documentElement.dataset.palette="indigo-violet"}})();`
++          }}
++        />
++      </head>
+       <body>
+         <ThemeProvider>
+           <MotionProvider>
+diff --git a/src/app/manifest.ts b/src/app/manifest.ts
+index 61ef2a7..8117b7c 100644
+--- a/src/app/manifest.ts
++++ b/src/app/manifest.ts
+@@ -6,8 +6,8 @@ export default function manifest(): MetadataRoute.Manifest {
+     description: "رزرو و مدیریت مسابقات",
+     start_url: "/",
+     display: "standalone",
+-    background_color: "#0a0f0d",
+-    theme_color: "#16b568",
++    background_color: "#0b1020",
++    theme_color: "#4f46e5",
+     lang: "fa",
+     dir: "rtl",
+     icons: [
+diff --git a/src/components/admin/settings-manager.tsx b/src/components/admin/settings-manager.tsx
+index 303c1b4..cb4fd2d 100644
+--- a/src/components/admin/settings-manager.tsx
++++ b/src/components/admin/settings-manager.tsx
+@@ -1,91 +1,218 @@
+-"use client";
+-
+-import { useEffect, useState } from "react";
+-import { Gauge, Save, ShieldCheck } from "lucide-react";
+-import { Alert } from "@/components/ui/alert";
+-import { Button } from "@/components/ui/button";
+-import { Card } from "@/components/ui/card";
+-import { Input } from "@/components/ui/input";
+-import { Label } from "@/components/ui/label";
+-import { SelectField } from "@/components/ui/select";
+-import { Switch } from "@/components/ui/switch";
+-import { Textarea } from "@/components/ui/textarea";
+-
+-type Settings = {
+-  club: { name: string; phone: string; address: string };
+-  auth: { admin2fa: "optional" | "required"; sessionDays: number };
+-  otp: { ttlMinutes: number; cooldownSeconds: number; hourlyLimit: number; ipHourlyLimit: number; maxAttempts: number };
+-  registration: { holdMinutes: number; correctionHours: number; waitlistOfferMinutes: number };
+-  home: { tournamentsLimit: number; liveMatchesLimit: number };
+-  payment: { cash: boolean; pos: boolean; receipt: boolean; partial: boolean };
+-  notification: { inApp: boolean; email: boolean; sms: "disabled" | "optional" | "required" };
+-};
+-
+-function ToggleRow({ label, checked, onCheckedChange }: { label: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+-  return <div className="flex items-center justify-between rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-sm font-bold"><span>{label}</span><Switch checked={checked} onCheckedChange={onCheckedChange} aria-label={label} /></div>;
+-}
+-
+-export function SettingsManager() {
+-  const [settings, setSettings] = useState<Settings | null>(null);
+-  const [saving, setSaving] = useState(false);
+-  const [message, setMessage] = useState("");
+-  const [error, setError] = useState("");
+-
+-  useEffect(() => {
+-    fetch("/api/admin/settings", { cache: "no-store" }).then(async (response) => ({ response, payload: await response.json() })).then(({ response, payload }) => {
+-      if (!response.ok) return setError(payload.message || "دریافت تنظیمات انجام نشد.");
+-      setSettings(payload.item);
+-    }).catch(() => setError("دریافت تنظیمات انجام نشد."));
+-  }, []);
+-
+-  async function save() {
+-    if (!settings) return;
+-    setSaving(true); setError(""); setMessage("");
+-    const response = await fetch("/api/admin/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+-    const payload = await response.json();
+-    setSaving(false);
+-    if (!response.ok) return setError(payload.message || "ذخیره تنظیمات انجام نشد.");
+-    setMessage("تنظیمات ذخیره شد.");
+-  }
+-
+-  if (!settings) return <p className="mt-7 text-sm text-[var(--muted)]">{error || "در حال دریافت تنظیمات..."}</p>;
+-
+-  return <>
+-    <div className="mt-7 grid gap-6 lg:grid-cols-2">
+-      <Card className="p-6">
+-        <h2 className="font-black">اطلاعات مجموعه</h2>
+-        <div className="mt-5 grid gap-4">
+-          <Label>نام مجموعه<Input value={settings.club.name} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, name: event.target.value } })} /></Label>
+-          <Label>شماره تماس<Input dir="ltr" value={settings.club.phone} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, phone: event.target.value } })} /></Label>
+-          <Label>آدرس<Textarea value={settings.club.address} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, address: event.target.value } })} /></Label>
+-        </div>
+-      </Card>
+-      <Card className="p-6">
+-        <h2 className="flex items-center gap-2 font-black"><Gauge className="text-[var(--brand)]" />نمایش صفحه اصلی</h2>
+-        <p className="mt-2 text-xs leading-6 text-[var(--muted)]">تعداد کارت‌هایی که در صفحه اصلی نمایش داده می‌شوند. مقدار کمتر، صفحه سبک‌تر و سریع‌تر می‌سازد.</p>
+-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+-          <Label>تعداد مسابقات<Input type="number" min="1" max="12" value={settings.home.tournamentsLimit} onChange={(event) => setSettings({ ...settings, home: { ...settings.home, tournamentsLimit: Number(event.target.value) } })} /></Label>
+-          <Label>تعداد نتایج زنده<Input type="number" min="1" max="12" value={settings.home.liveMatchesLimit} onChange={(event) => setSettings({ ...settings, home: { ...settings.home, liveMatchesLimit: Number(event.target.value) } })} /></Label>
+-        </div>
+-      </Card>
+-      <Card className="p-6 lg:col-span-2">
+-        <h2 className="flex items-center gap-2 font-black"><ShieldCheck className="text-[var(--brand)]" />امنیت و سرویس‌ها</h2>
+-        <div className="mt-5 grid gap-4">
+-          <Label>ورود دومرحله‌ای مدیر<SelectField value={settings.auth.admin2fa} onValueChange={(value) => setSettings({ ...settings, auth: { ...settings.auth, admin2fa: value as Settings["auth"]["admin2fa"] } })} options={[{ value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>
+-          <Label>اعتبار نشست (روز)<Input type="number" min="1" max="90" value={settings.auth.sessionDays} onChange={(event) => setSettings({ ...settings, auth: { ...settings.auth, sessionDays: Number(event.target.value) } })} /></Label>
+-          <div className="grid grid-cols-2 gap-3"><Label>مهلت Hold (دقیقه)<Input type="number" min="5" max="120" value={settings.registration.holdMinutes} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, holdMinutes: Number(event.target.value) } })} /></Label><Label>مهلت اصلاح (ساعت)<Input type="number" min="1" max="168" value={settings.registration.correctionHours} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, correctionHours: Number(event.target.value) } })} /></Label><Label>مهلت پیشنهاد صف (دقیقه)<Input type="number" min="5" max="1440" value={settings.registration.waitlistOfferMinutes} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, waitlistOfferMinutes: Number(event.target.value) } })} /></Label><Label>اعتبار OTP (دقیقه)<Input type="number" min="2" max="30" value={settings.otp.ttlMinutes} onChange={(event) => setSettings({ ...settings, otp: { ...settings.otp, ttlMinutes: Number(event.target.value) } })} /></Label></div>
+-          <ToggleRow label="پرداخت نقدی حضوری" checked={settings.payment.cash} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, cash: checked } })} />
+-          <ToggleRow label="پرداخت با کارتخوان حضوری" checked={settings.payment.pos} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, pos: checked } })} />
+-          <ToggleRow label="انتقال بانکی و رسید اختیاری" checked={settings.payment.receipt} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, receipt: checked } })} />
+-          <ToggleRow label="اعلان داخل برنامه" checked={settings.notification.inApp} onCheckedChange={(checked) => setSettings({ ...settings, notification: { ...settings.notification, inApp: checked } })} />
+-          <ToggleRow label="اعلان ایمیلی" checked={settings.notification.email} onCheckedChange={(checked) => setSettings({ ...settings, notification: { ...settings.notification, email: checked } })} />
+-          <Label>سیاست پیامک<SelectField value={settings.notification.sms} onValueChange={(value) => setSettings({ ...settings, notification: { ...settings.notification, sms: value as Settings["notification"]["sms"] } })} options={[{value:"disabled",label:"غیرفعال"},{value:"optional",label:"اختیاری"},{value:"required",label:"اجباری"}]} /></Label>
+-          <Alert tone="warning" className="text-xs font-normal">کلیدهای SMS.ir فقط از فایل env سرور خوانده می‌شوند. فعال‌بودن اعلان داخل برنامه و روش‌های پرداخت از این بخش مدیریت می‌شود.</Alert>
+-        </div>
+-      </Card>
+-    </div>
+-    {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+-    {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+-    <Button className="mt-5" type="button" onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={16} />ذخیره تنظیمات</Button>
+-  </>;
+-}
++"use client";
++
++import { useEffect, useRef, useState } from "react";
++import { FlaskConical, Gauge, Palette, Save, ShieldCheck } from "lucide-react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { Input } from "@/components/ui/input";
++import { Label } from "@/components/ui/label";
++import { SelectField } from "@/components/ui/select";
++import { Switch } from "@/components/ui/switch";
++import { Textarea } from "@/components/ui/textarea";
++import {
++  DEFAULT_THEME_PALETTE,
++  THEME_PALETTES,
++  THEME_PALETTE_STORAGE_KEY,
++  type ThemePaletteId
++} from "@/lib/theme-palettes";
++
++type AppearanceSettings = {
++  experimentalEnabled: boolean;
++  palette: ThemePaletteId;
++};
++
++type Settings = {
++  club: { name: string; phone: string; address: string };
++  auth: { admin2fa: "optional" | "required"; sessionDays: number };
++  otp: { ttlMinutes: number; cooldownSeconds: number; hourlyLimit: number; ipHourlyLimit: number; maxAttempts: number };
++  registration: { holdMinutes: number; correctionHours: number; waitlistOfferMinutes: number };
++  home: { tournamentsLimit: number; liveMatchesLimit: number };
++  appearance: AppearanceSettings;
++  payment: { cash: boolean; pos: boolean; receipt: boolean; partial: boolean };
++  notification: { inApp: boolean; email: boolean; sms: "disabled" | "optional" | "required" };
++};
++
++function ToggleRow({ label, checked, onCheckedChange }: { label: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
++  return (
++    <div className="flex items-center justify-between rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] p-4 text-sm font-bold">
++      <span>{label}</span>
++      <Switch checked={checked} onCheckedChange={onCheckedChange} aria-label={label} />
++    </div>
++  );
++}
++
++function activePalette(appearance: AppearanceSettings) {
++  return appearance.experimentalEnabled ? appearance.palette : DEFAULT_THEME_PALETTE;
++}
++
++function applyPalette(palette: ThemePaletteId, persist: boolean) {
++  document.documentElement.dataset.palette = palette;
++  if (!persist) return;
++  try {
++    localStorage.setItem(THEME_PALETTE_STORAGE_KEY, palette);
++  } catch {
++    // The visual preview still works when storage is blocked.
++  }
++}
++
++export function SettingsManager() {
++  const [settings, setSettings] = useState<Settings | null>(null);
++  const [saving, setSaving] = useState(false);
++  const [message, setMessage] = useState("");
++  const [error, setError] = useState("");
++  const savedAppearance = useRef<AppearanceSettings | null>(null);
++
++  useEffect(() => {
++    fetch("/api/admin/settings", { cache: "no-store" })
++      .then(async (response) => ({ response, payload: await response.json() }))
++      .then(({ response, payload }) => {
++        if (!response.ok) return setError(payload.message || "دریافت تنظیمات انجام نشد.");
++        const item = payload.item as Settings;
++        savedAppearance.current = item.appearance;
++        setSettings(item);
++        applyPalette(activePalette(item.appearance), true);
++      })
++      .catch(() => setError("دریافت تنظیمات انجام نشد."));
++
++    return () => {
++      if (savedAppearance.current) applyPalette(activePalette(savedAppearance.current), true);
++    };
++  }, []);
++
++  function updateAppearance(appearance: AppearanceSettings) {
++    setSettings((current) => current ? { ...current, appearance } : current);
++    applyPalette(activePalette(appearance), false);
++  }
++
++  async function save() {
++    if (!settings) return;
++    setSaving(true);
++    setError("");
++    setMessage("");
++
++    try {
++      const response = await fetch("/api/admin/settings", {
++        method: "PUT",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(settings)
++      });
++      const payload = await response.json();
++      if (!response.ok) {
++        if (savedAppearance.current) applyPalette(activePalette(savedAppearance.current), true);
++        return setError(payload.message || "ذخیره تنظیمات انجام نشد.");
++      }
++
++      savedAppearance.current = settings.appearance;
++      applyPalette(activePalette(settings.appearance), true);
++      setMessage("تنظیمات ذخیره شد.");
++    } catch {
++      if (savedAppearance.current) applyPalette(activePalette(savedAppearance.current), true);
++      setError("ذخیره تنظیمات انجام نشد.");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  if (!settings) {
++    return <p className="mt-7 text-sm text-[var(--muted)]">{error || "در حال دریافت تنظیمات..."}</p>;
++  }
++
++  return (
++    <>
++      <div className="mt-7 grid gap-6 lg:grid-cols-2">
++        <Card className="p-6">
++          <h2 className="font-black">اطلاعات مجموعه</h2>
++          <div className="mt-5 grid gap-4">
++            <Label>نام مجموعه<Input value={settings.club.name} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, name: event.target.value } })} /></Label>
++            <Label>شماره تماس<Input dir="ltr" value={settings.club.phone} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, phone: event.target.value } })} /></Label>
++            <Label>آدرس<Textarea value={settings.club.address} onChange={(event) => setSettings({ ...settings, club: { ...settings.club, address: event.target.value } })} /></Label>
++          </div>
++        </Card>
++
++        <Card className="p-6">
++          <h2 className="flex items-center gap-2 font-black"><Gauge className="text-[var(--brand)]" />نمایش صفحه اصلی</h2>
++          <p className="mt-2 text-xs leading-6 text-[var(--muted)]">تعداد کارت‌هایی که در صفحه اصلی نمایش داده می‌شوند. مقدار کمتر، صفحه سبک‌تر و سریع‌تر می‌سازد.</p>
++          <div className="mt-5 grid gap-4 sm:grid-cols-2">
++            <Label>تعداد مسابقات<Input type="number" min="1" max="12" value={settings.home.tournamentsLimit} onChange={(event) => setSettings({ ...settings, home: { ...settings.home, tournamentsLimit: Number(event.target.value) } })} /></Label>
++            <Label>تعداد نتایج زنده<Input type="number" min="1" max="12" value={settings.home.liveMatchesLimit} onChange={(event) => setSettings({ ...settings, home: { ...settings.home, liveMatchesLimit: Number(event.target.value) } })} /></Label>
++          </div>
++        </Card>
++
++        <Card className="p-6 lg:col-span-2">
++          <div className="flex flex-wrap items-center justify-between gap-3">
++            <div>
++              <h2 className="flex items-center gap-2 font-black"><Palette className="text-[var(--brand)]" />آزمایشگاه رنگ</h2>
++              <p className="mt-2 text-xs leading-6 text-[var(--muted)]">این بخش فقط برای مقایسه آزمایشی Paletteهاست و در بخش عمومی هیچ کنترل یا کد سنگینی اضافه نمی‌کند.</p>
++            </div>
++            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-bold text-[var(--muted)]">
++              <FlaskConical size={14} /> آزمایشی
++            </span>
++          </div>
++
++          <div className="mt-5">
++            <ToggleRow
++              label="فعال‌سازی انتخاب Palette آزمایشی"
++              checked={settings.appearance.experimentalEnabled}
++              onCheckedChange={(experimentalEnabled) => updateAppearance({ ...settings.appearance, experimentalEnabled })}
++            />
++          </div>
++
++          {settings.appearance.experimentalEnabled && (
++            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
++              {THEME_PALETTES.map((palette) => {
++                const selected = settings.appearance.palette === palette.id;
++                return (
++                  <button
++                    key={palette.id}
++                    type="button"
++                    aria-pressed={selected}
++                    onClick={() => updateAppearance({ ...settings.appearance, palette: palette.id })}
++                    className={`rounded-2xl border p-4 text-right ${selected ? "border-[var(--brand)] bg-[var(--brand-soft)]" : "border-[var(--line)] bg-[var(--surface-2)]"}`}
++                  >
++                    <span className="flex gap-1.5" dir="ltr">
++                      {palette.swatches.map((color) => <span key={color} className="h-6 flex-1 rounded-lg" style={{ backgroundColor: color }} />)}
++                    </span>
++                    <span className="mt-3 block text-sm font-black">{palette.label}</span>
++                    <span className="mt-1 block text-xs leading-5 text-[var(--muted)]">{palette.description}</span>
++                  </button>
++                );
++              })}
++            </div>
++          )}
++
++          {!settings.appearance.experimentalEnabled && (
++            <Alert tone="info" className="mt-4 text-xs font-normal">
++              در حالت غیرفعال، Palette پیش‌فرض «آبی ارغوانی» استفاده می‌شود و انتخاب‌گر رنگ مخفی می‌ماند.
++            </Alert>
++          )}
++        </Card>
++
++        <Card className="p-6 lg:col-span-2">
++          <h2 className="flex items-center gap-2 font-black"><ShieldCheck className="text-[var(--brand)]" />امنیت و سرویس‌ها</h2>
++          <div className="mt-5 grid gap-4">
++            <Label>ورود دومرحله‌ای مدیر<SelectField value={settings.auth.admin2fa} onValueChange={(value) => setSettings({ ...settings, auth: { ...settings.auth, admin2fa: value as Settings["auth"]["admin2fa"] } })} options={[{ value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>
++            <Label>اعتبار نشست (روز)<Input type="number" min="1" max="90" value={settings.auth.sessionDays} onChange={(event) => setSettings({ ...settings, auth: { ...settings.auth, sessionDays: Number(event.target.value) } })} /></Label>
++            <div className="grid grid-cols-2 gap-3">
++              <Label>مهلت Hold (دقیقه)<Input type="number" min="5" max="120" value={settings.registration.holdMinutes} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, holdMinutes: Number(event.target.value) } })} /></Label>
++              <Label>مهلت اصلاح (ساعت)<Input type="number" min="1" max="168" value={settings.registration.correctionHours} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, correctionHours: Number(event.target.value) } })} /></Label>
++              <Label>مهلت پیشنهاد صف (دقیقه)<Input type="number" min="5" max="1440" value={settings.registration.waitlistOfferMinutes} onChange={(event) => setSettings({ ...settings, registration: { ...settings.registration, waitlistOfferMinutes: Number(event.target.value) } })} /></Label>
++              <Label>اعتبار OTP (دقیقه)<Input type="number" min="2" max="30" value={settings.otp.ttlMinutes} onChange={(event) => setSettings({ ...settings, otp: { ...settings.otp, ttlMinutes: Number(event.target.value) } })} /></Label>
++            </div>
++            <ToggleRow label="پرداخت نقدی حضوری" checked={settings.payment.cash} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, cash: checked } })} />
++            <ToggleRow label="پرداخت با کارتخوان حضوری" checked={settings.payment.pos} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, pos: checked } })} />
++            <ToggleRow label="انتقال بانکی و رسید اختیاری" checked={settings.payment.receipt} onCheckedChange={(checked) => setSettings({ ...settings, payment: { ...settings.payment, receipt: checked } })} />
++            <ToggleRow label="اعلان داخل برنامه" checked={settings.notification.inApp} onCheckedChange={(checked) => setSettings({ ...settings, notification: { ...settings.notification, inApp: checked } })} />
++            <ToggleRow label="اعلان ایمیلی" checked={settings.notification.email} onCheckedChange={(checked) => setSettings({ ...settings, notification: { ...settings.notification, email: checked } })} />
++            <Label>سیاست پیامک<SelectField value={settings.notification.sms} onValueChange={(value) => setSettings({ ...settings, notification: { ...settings.notification, sms: value as Settings["notification"]["sms"] } })} options={[{ value: "disabled", label: "غیرفعال" }, { value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>
++            <Alert tone="warning" className="text-xs font-normal">کلیدهای SMS.ir فقط از فایل env سرور خوانده می‌شوند. فعال‌بودن اعلان داخل برنامه و روش‌های پرداخت از این بخش مدیریت می‌شود.</Alert>
++          </div>
++        </Card>
++      </div>
++
++      {error && <Alert tone="error" className="mt-4">{error}</Alert>}
++      {message && <Alert tone="success" className="mt-4">{message}</Alert>}
++      <Button className="mt-5" type="button" onClick={save} loading={saving} loadingText="در حال ذخیره"><Save size={16} />ذخیره تنظیمات</Button>
++    </>
++  );
++}
+diff --git a/src/components/auth/auth-shell.tsx b/src/components/auth/auth-shell.tsx
+index c744a4c..f9e38fb 100644
+--- a/src/components/auth/auth-shell.tsx
++++ b/src/components/auth/auth-shell.tsx
+@@ -21,11 +21,11 @@ export function AuthShell({
+       <div className="hero-noise absolute inset-0 -z-10" />
+       <div
+         aria-hidden="true"
+-        className="absolute -right-32 -top-24 -z-10 h-[420px] w-[420px] rounded-full bg-emerald-500/20 blur-[120px]"
++        className="absolute -right-32 -top-24 -z-10 h-[420px] w-[420px] rounded-full bg-[color-mix(in_srgb,var(--brand)_22%,transparent)] blur-[120px]"
+       />
+       <div
+         aria-hidden="true"
+-        className="absolute -bottom-36 -left-28 -z-10 h-[400px] w-[400px] rounded-full bg-amber-400/15 blur-[120px]"
++        className="absolute -bottom-36 -left-28 -z-10 h-[400px] w-[400px] rounded-full bg-[color-mix(in_srgb,var(--accent)_18%,transparent)] blur-[120px]"
+       />
+ 
+       <div className="mx-auto grid min-h-[calc(100vh-24px)] w-full max-w-6xl overflow-hidden rounded-[2rem] border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-float)] lg:grid-cols-[.93fr_1.07fr] sm:min-h-[calc(100vh-40px)]">
+@@ -50,15 +50,15 @@ export function AuthShell({
+         </section>
+ 
+         <aside
+-          className="relative hidden overflow-hidden bg-[#07110c] p-9 text-white lg:flex lg:flex-col"
++          className="relative hidden overflow-hidden bg-[#0b1020] p-9 text-white lg:flex lg:flex-col"
+         >
+           <div className="hero-grid absolute inset-0 opacity-40" />
+           <div className="hero-noise absolute inset-0" />
+-          <div className="absolute -left-24 top-10 h-72 w-72 rounded-full bg-amber-400/15 blur-[100px]" />
+-          <div className="absolute -right-20 bottom-0 h-80 w-80 rounded-full bg-emerald-400/20 blur-[110px]" />
++          <div className="absolute -left-24 top-10 h-72 w-72 rounded-full bg-[color-mix(in_srgb,var(--accent)_18%,transparent)] blur-[100px]" />
++          <div className="absolute -right-20 bottom-0 h-80 w-80 rounded-full bg-[color-mix(in_srgb,var(--brand)_22%,transparent)] blur-[110px]" />
+ 
+           <div className="relative flex h-full flex-col">
+-            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-black text-emerald-300 backdrop-blur">
++            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-black text-[var(--brand)] backdrop-blur">
+               <Radio size={15} />
+               مرکز رقابت Coffee Game
+             </span>
+@@ -86,7 +86,7 @@ export function AuthShell({
+                   const ItemIcon = Icon as typeof ShieldCheck;
+                   return (
+                     <div key={String(label)} className="rounded-2xl border border-white/8 bg-white/[.035] p-4 text-center">
+-                      <ItemIcon className="mx-auto text-emerald-300" size={21} />
++                      <ItemIcon className="mx-auto text-[var(--brand)]" size={21} />
+                       <span className="mt-2 block text-xs font-bold text-white/65">{String(label)}</span>
+                     </div>
+                   );
+diff --git a/src/components/home/home-hero.tsx b/src/components/home/home-hero.tsx
+index afe04da..244639a 100644
+--- a/src/components/home/home-hero.tsx
++++ b/src/components/home/home-hero.tsx
+@@ -31,14 +31,14 @@ export function HomeHero({
+       <div className="container-shell grid min-h-[640px] items-center gap-14 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-20">
+         <div
+         >
+-          <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-xs font-black text-emerald-500 shadow-sm">
++          <span className="inline-flex items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--brand)_24%,transparent)] bg-[var(--brand-soft)] px-4 py-2 text-xs font-black text-[var(--brand)] shadow-sm">
+             <Sparkles size={15} />
+             مسابقه، رزرو و نتیجه در یک تجربه روان
+           </span>
+ 
+           <h1 className="mt-7 max-w-3xl text-[clamp(2.45rem,6vw,5rem)] font-black leading-[1.2] tracking-[-.065em]">
+             رقابت را شروع کن،
+-            <span className="mt-1 block bg-gradient-to-l from-[var(--brand)] via-emerald-400 to-amber-400 bg-clip-text text-transparent">
++            <span className="mt-1 block bg-gradient-to-l from-[var(--brand)] via-[var(--accent)] to-[var(--brand-strong)] bg-clip-text text-transparent">
+               بقیه‌اش با ما.
+             </span>
+           </h1>
+@@ -81,7 +81,7 @@ export function HomeHero({
+           <div
+             className="home-feature-panel relative overflow-hidden rounded-[2rem] p-4 sm:p-5"
+           >
+-            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-400/70 to-transparent" />
++            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--brand)] to-transparent" />
+ 
+             <div className="flex items-center justify-between gap-4 rounded-[1.5rem] border border-white/8 bg-black/90 p-4 text-white">
+               <div className="flex items-center gap-3">
+@@ -95,17 +95,17 @@ export function HomeHero({
+                 />
+                 <div>
+                   <strong className="block text-sm font-black tracking-wide">COFFEE GAME</strong>
+-                  <span className="text-xs font-bold text-emerald-400">ستارخان</span>
++                  <span className="text-xs font-bold text-[var(--brand)]">ستارخان</span>
+                 </div>
+               </div>
+-              <span className="inline-flex items-center gap-2 rounded-full bg-emerald-400/12 px-3 py-2 text-xs font-black text-emerald-300">
+-                <span className="live-pulse relative h-2 w-2 rounded-full bg-emerald-400 text-emerald-400" />
++              <span className="inline-flex items-center gap-2 rounded-full bg-[var(--brand-soft)] px-3 py-2 text-xs font-black text-[var(--brand)]">
++                <span className="live-pulse relative h-2 w-2 rounded-full bg-[var(--brand)] text-[var(--brand)]" />
+                 سیستم آنلاین
+               </span>
+             </div>
+ 
+-            <div className="mt-4 rounded-[1.65rem] bg-gradient-to-br from-[#0c7f4b] via-[#10231a] to-[#8a6718] p-[1px]">
+-              <div className="rounded-[calc(1.65rem-1px)] bg-[#09120e]/94 p-5 text-white sm:p-6">
++            <div className="mt-4 theme-showcase-frame rounded-[1.65rem] p-[1px]">
++              <div className="rounded-[calc(1.65rem-1px)] bg-[#0b1020]/95 p-5 text-white sm:p-6">
+                 <div className="flex items-start justify-between gap-3">
+                   <div>
+                     <span className="text-xs font-bold text-white/55">مسابقه پیشنهادی</span>
+@@ -113,18 +113,18 @@ export function HomeHero({
+                       {featured?.title || "جام هفتگی Coffee Game"}
+                     </h2>
+                   </div>
+-                  <span className="rounded-xl bg-white/8 px-3 py-2 text-xs font-bold text-emerald-300">
++                  <span className="rounded-xl bg-white/8 px-3 py-2 text-xs font-bold text-[var(--brand)]">
+                     {featured?.gameTitle || "FC 26"}
+                   </span>
+                 </div>
+ 
+                 <div className="mt-6 grid gap-3 text-xs text-white/65 sm:grid-cols-2">
+                   <span className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-3">
+-                    <CalendarDays size={16} className="text-emerald-300" />
++                    <CalendarDays size={16} className="text-[var(--brand)]" />
+                     {featured ? `${featured.date}، ${featured.time}` : "جمعه ساعت ۲۰:۰۰"}
+                   </span>
+                   <span className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-3">
+-                    <MapPin size={16} className="text-amber-300" />
++                    <MapPin size={16} className="text-[var(--accent)]" />
+                     {featured?.venue || "Coffee Game ستارخان"}
+                   </span>
+                 </div>
+@@ -141,7 +141,7 @@ export function HomeHero({
+                   </div>
+                   <div className="h-2.5 overflow-hidden rounded-full bg-white/8">
+                     <span
+-                      className="block h-full rounded-full bg-gradient-to-l from-emerald-400 to-amber-300"
++                      className="block h-full rounded-full bg-gradient-to-l from-[var(--brand)] to-[var(--accent)]"
+                       style={{ width: `${featured ? percentage : 36}%` }}
+                     />
+                   </div>
+@@ -149,7 +149,7 @@ export function HomeHero({
+ 
+                 <div className="mt-6 flex items-center justify-between gap-4 border-t border-white/8 pt-5">
+                   <span className="text-xs text-white/55">هزینه ورودی</span>
+-                  <strong className="text-base text-emerald-300">
++                  <strong className="text-base text-[var(--brand)]">
+                     {featured ? (featured.price ? formatToman(featured.price) : "رایگان") : "۳۵۰٬۰۰۰ تومان"}
+                   </strong>
+                 </div>
+@@ -172,7 +172,7 @@ export function HomeHero({
+ 
+           <div
+             aria-hidden="true"
+-            className="absolute -left-3 top-16 hidden rounded-2xl border border-amber-400/20 bg-[#161208]/90 px-4 py-3 text-xs font-black text-amber-300 shadow-xl sm:block"
++            className="absolute -left-3 top-16 hidden rounded-2xl border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] bg-[#111522]/95 px-4 py-3 text-xs font-black text-[var(--accent)] shadow-xl sm:block"
+           >
+             قرعه‌کشی زنده
+           </div>
+diff --git a/src/components/theme-provider.tsx b/src/components/theme-provider.tsx
+index 7be2b1f..4e1e0b0 100644
+--- a/src/components/theme-provider.tsx
++++ b/src/components/theme-provider.tsx
+@@ -1,9 +1,37 @@
+ "use client";
+ 
+ import { ThemeProvider as NextThemesProvider } from "next-themes";
+-import type { ReactNode } from "react";
++import { useEffect, type ReactNode } from "react";
++import { DEFAULT_THEME_PALETTE, isThemePaletteId, THEME_PALETTE_STORAGE_KEY } from "@/lib/theme-palettes";
++
++function applyPalette(palette: string) {
++  const normalized = isThemePaletteId(palette) ? palette : DEFAULT_THEME_PALETTE;
++  document.documentElement.dataset.palette = normalized;
++  try {
++    localStorage.setItem(THEME_PALETTE_STORAGE_KEY, normalized);
++  } catch {
++    // Storage may be blocked; applying the data attribute is enough.
++  }
++}
+ 
+ export function ThemeProvider({ children }: { children: ReactNode }) {
++  useEffect(() => {
++    let cancelled = false;
++
++    fetch("/api/theme")
++      .then(async (response) => response.ok ? response.json() as Promise<{ palette?: unknown }> : null)
++      .then((payload) => {
++        if (!cancelled && payload && isThemePaletteId(payload.palette)) applyPalette(payload.palette);
++      })
++      .catch(() => {
++        if (!document.documentElement.dataset.palette) applyPalette(DEFAULT_THEME_PALETTE);
++      });
++
++    return () => {
++      cancelled = true;
++    };
++  }, []);
++
+   return (
+     <NextThemesProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+       {children}
+diff --git a/src/lib/theme-palettes.ts b/src/lib/theme-palettes.ts
+new file mode 100644
+index 0000000..ff076f0
+--- /dev/null
++++ b/src/lib/theme-palettes.ts
+@@ -0,0 +1,51 @@
++export const DEFAULT_THEME_PALETTE = "indigo-violet" as const;
++export const THEME_PALETTE_STORAGE_KEY = "coffee-game-theme-palette-v1";
++
++export const THEME_PALETTES = [
++  {
++    id: "indigo-violet",
++    label: "آبی ارغوانی",
++    description: "متعادل، مدرن و قابل اعتماد",
++    swatches: ["#4f46e5", "#6366f1", "#8b5cf6", "#c4b5fd"]
++  },
++  {
++    id: "ocean-cyan",
++    label: "اقیانوسی",
++    description: "آرام، شفاف و تکنولوژیک",
++    swatches: ["#0369a1", "#0284c7", "#06b6d4", "#67e8f9"]
++  },
++  {
++    id: "royal-purple",
++    label: "بنفش خلاق",
++    description: "خلاق، پرانرژی و متفاوت",
++    swatches: ["#6d28d9", "#7c3aed", "#db2777", "#f0abfc"]
++  },
++  {
++    id: "sunset-coral",
++    label: "غروب گرم",
++    description: "صمیمی، فعال و دعوت‌کننده",
++    swatches: ["#c2410c", "#ea580c", "#f59e0b", "#fdba74"]
++  },
++  {
++    id: "graphite-gold",
++    label: "گرافیتی طلایی",
++    description: "جدی، مینیمال و لوکس",
++    swatches: ["#1e293b", "#475569", "#d4a017", "#f5d76e"]
++  },
++  {
++    id: "emerald-gold",
++    label: "زمردی کلاسیک",
++    description: "آشنا، پویا و ورزشی",
++    swatches: ["#087a43", "#0f9f5c", "#ca941c", "#efbd45"]
++  }
++] as const;
++
++export type ThemePaletteId = (typeof THEME_PALETTES)[number]["id"];
++
++export function isThemePaletteId(value: unknown): value is ThemePaletteId {
++  return THEME_PALETTES.some((palette) => palette.id === value);
++}
++
++export function normalizeThemePalette(value: unknown): ThemePaletteId {
++  return isThemePaletteId(value) ? value : DEFAULT_THEME_PALETTE;
++}
+diff --git a/src/lib/theme-settings.ts b/src/lib/theme-settings.ts
+new file mode 100644
+index 0000000..f22512d
+--- /dev/null
++++ b/src/lib/theme-settings.ts
+@@ -0,0 +1,47 @@
++import { unstable_cache } from "next/cache";
++import type { RowDataPacket } from "mysql2";
++import { queryRows } from "@/lib/db";
++import { DEFAULT_THEME_PALETTE, normalizeThemePalette, type ThemePaletteId } from "@/lib/theme-palettes";
++
++export type AppearanceSettings = {
++  experimentalEnabled: boolean;
++  palette: ThemePaletteId;
++};
++
++type SettingRow = RowDataPacket & { value: unknown };
++
++export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
++  experimentalEnabled: false,
++  palette: DEFAULT_THEME_PALETTE
++};
++
++function parse(value: unknown): Record<string, unknown> {
++  try {
++    if (typeof value === "string") return JSON.parse(value) as Record<string, unknown>;
++    return value && typeof value === "object" ? value as Record<string, unknown> : {};
++  } catch {
++    return {};
++  }
++}
++
++async function loadAppearanceSettings(): Promise<AppearanceSettings> {
++  const rows = await queryRows<SettingRow[]>(
++    "SELECT value FROM app_settings WHERE `key`='appearance.settings' LIMIT 1"
++  );
++  const stored = parse(rows[0]?.value);
++  return {
++    experimentalEnabled: stored.experimentalEnabled === true,
++    palette: normalizeThemePalette(stored.palette)
++  };
++}
++
++export const getAppearanceSettings = unstable_cache(
++  loadAppearanceSettings,
++  ["appearance-settings-v1"],
++  { revalidate: 300, tags: ["appearance-theme"] }
++);
++
++export async function getActiveThemePalette() {
++  const settings = await getAppearanceSettings();
++  return settings.experimentalEnabled ? settings.palette : DEFAULT_THEME_PALETTE;
++}

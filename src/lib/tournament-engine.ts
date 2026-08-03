@@ -2,6 +2,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { db } from "@/lib/db";
 import { planKnockout, type PlannedPairing } from "@/lib/draw-planner";
+import { inspectTournamentParticipants } from "@/lib/tournament-participants";
 
 type Participant = {
   playerId: number | null;
@@ -696,19 +697,41 @@ function participantsFromOrder(participants: Participant[], orderedKeys: string[
   });
 }
 
+function validateCompleteSeeds(participants: Participant[]) {
+  const seeds = participants.map((participant) => participant.seed);
+  if (seeds.some((seed) => seed === null)) {
+    throw new Error("SEEDED_DRAW_REQUIRES_ALL_SEEDS");
+  }
+  const ordered = [...(seeds as number[])].sort((left, right) => left - right);
+  if (ordered.some((seed, index) => seed !== index + 1)) {
+    throw new Error("SEEDED_DRAW_SEEDS_MUST_BE_CONTIGUOUS");
+  }
+}
+
 function buildInitialPlan(
   tournament: TournamentRow,
   participants: Participant[],
   options: TournamentDrawOptions = {}
 ) {
   const category = formatCategory(tournament.format);
-  const knockoutPlan = planKnockout(participants, drawMode(tournament.draw_mode), {
+  const mode = drawMode(tournament.draw_mode);
+  const pairingCategory = category === "knockout" || category === "double";
+
+  if (mode === "seeded") validateCompleteSeeds(participants);
+  if (mode === "custom" && pairingCategory && !options.manualPairings) {
+    throw new Error("MANUAL_DRAW_REQUIRED");
+  }
+  if (mode === "custom" && !pairingCategory && !options.participantOrder) {
+    throw new Error("MANUAL_DRAW_REQUIRED");
+  }
+
+  const knockoutPlan = planKnockout(participants, mode, {
     participantOrder: options.participantOrder,
-    manualPairings: category === "knockout" || category === "double"
+    manualPairings: mode === "custom" && pairingCategory
       ? options.manualPairings
       : undefined
   });
-  const plan = category === "knockout" || category === "double"
+  const plan = pairingCategory
     ? knockoutPlan
     : { ...knockoutPlan, slots: knockoutPlan.orderedKeys, pairings: [] };
   return {
@@ -728,6 +751,10 @@ async function ensureDrawCanBeCreated(
   }
   if (participants.length < Math.max(2, Number(tournament.min_participants || 2))) {
     throw new Error("MINIMUM_PARTICIPANTS_NOT_REACHED");
+  }
+  const inspection = await inspectTournamentParticipants(connection, tournament.id);
+  if (!inspection?.readyForDraw) {
+    throw new Error("PARTICIPANTS_NOT_FINALIZED");
   }
   const [existing] = await connection.query<RowDataPacket[]>(`
     SELECT id FROM tournament_matches WHERE tournament_id=? LIMIT 1
@@ -801,10 +828,17 @@ async function createInitialDraw(
 
 async function resetDrawInTransaction(connection: PoolConnection, tournamentId: number) {
   const [lockedMatches] = await connection.query<RowDataPacket[]>(`
-    SELECT id
-    FROM tournament_matches
-    WHERE tournament_id=?
-      AND (status IN ('LIVE','COMPLETED') OR started_at IS NOT NULL OR completed_at IS NOT NULL)
+    SELECT match_row.id
+    FROM tournament_matches match_row
+    WHERE match_row.tournament_id=?
+      AND (
+        match_row.status='LIVE'
+        OR match_row.started_at IS NOT NULL
+        OR (
+          match_row.status='COMPLETED'
+          AND (SELECT COUNT(*) FROM match_participants participant WHERE participant.match_id=match_row.id) >= 2
+        )
+      )
     LIMIT 1
     FOR UPDATE
   `, [tournamentId]);
@@ -849,6 +883,8 @@ export async function previewTournamentDraw(
     if (participants.length < Math.max(2, Number(tournament.min_participants || 2))) {
       throw new Error("MINIMUM_PARTICIPANTS_NOT_REACHED");
     }
+    const inspection = await inspectTournamentParticipants(connection, tournament.id);
+    if (!inspection?.readyForDraw) throw new Error("PARTICIPANTS_NOT_FINALIZED");
     const { category, plan } = buildInitialPlan(tournament, participants, options);
     await connection.rollback();
     return {
@@ -927,6 +963,36 @@ export async function regenerateTournamentDraw(
   }
 }
 
+async function tournamentHasOpenDispute(connection: PoolConnection, tournamentId: number) {
+  const [rows] = await connection.query<RowDataPacket[]>(`
+    SELECT dispute.id
+    FROM match_disputes dispute
+    JOIN tournament_matches match_row ON match_row.id=dispute.match_id
+    WHERE match_row.tournament_id=? AND dispute.status IN ('open','accepted')
+    LIMIT 1
+  `, [tournamentId]);
+  return Boolean(rows[0]);
+}
+
+async function tournamentHasUnresolvedCancelledMatch(connection: PoolConnection, tournamentId: number) {
+  const [rows] = await connection.query<RowDataPacket[]>(`
+    SELECT match_row.id
+    FROM tournament_matches match_row
+    WHERE match_row.tournament_id=? AND match_row.status='CANCELLED'
+      AND match_row.winner_slot IS NULL
+      AND (SELECT COUNT(*) FROM match_participants participant WHERE participant.match_id=match_row.id)>=2
+    LIMIT 1
+  `, [tournamentId]);
+  return Boolean(rows[0]);
+}
+
+async function markTournamentCompleted(connection: PoolConnection, tournamentId: number) {
+  await connection.execute(`
+    UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?
+  `, [tournamentId]);
+  return { advanced: true, completed: true };
+}
+
 export async function advanceTournament(connection: PoolConnection, tournamentId: number) {
   const tournament = await loadTournament(connection, tournamentId);
   if (!tournament || tournament.status === "COMPLETED") return { advanced: false };
@@ -937,11 +1003,16 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
     LIMIT 1
   `, [tournament.id]);
   if (pending[0]) return { advanced: false };
+  if (await tournamentHasOpenDispute(connection, tournament.id)) {
+    return { advanced: false, blocked: "OPEN_DISPUTE" };
+  }
+  if (await tournamentHasUnresolvedCancelledMatch(connection, tournament.id)) {
+    return { advanced: false, blocked: "UNRESOLVED_CANCELLED_MATCH" };
+  }
 
   const category = formatCategory(tournament.format);
   if (category === "league") {
-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
-    return { advanced: true, completed: true };
+    return markTournamentCompleted(connection, tournament.id);
   }
 
   if (category === "group") {
@@ -1005,8 +1076,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
       await createSwissRound(connection, tournament, participants, currentRound + 1);
       return { advanced: true, completed: false };
     }
-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
-    return { advanced: true, completed: true };
+    return markTournamentCompleted(connection, tournament.id);
   }
 
   if (category === "double") {
@@ -1028,8 +1098,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
       ORDER BY state.losses,COALESCE(re.seed,999999),state.updated_at
     `, [tournament.id]);
     if (activeRows.length <= 1) {
-      await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
-      return { advanced: true, completed: true };
+      return markTournamentCompleted(connection, tournament.id);
     }
 
     const participants = activeRows.map((row): Participant => ({
@@ -1113,8 +1182,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
 
   const resolved = await resolveKnockoutRound(connection, lastRound.id);
   if (resolved.winners.length <= 1) {
-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
-    return { advanced: true, completed: true };
+    return markTournamentCompleted(connection, tournament.id);
   }
 
   const nextRoundNumber = Number(lastRound.round_number) + 1;
@@ -1137,174 +1205,6 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
     resolved.winners.length === 2 ? "فینال" : `دور ${nextRoundNumber}`
   );
   return { advanced: true, completed: false };
-}
-
-export async function scheduleTournamentMatches(tournamentId: number) {
-  const connection = await db.getConnection();
-  try {
-    await connection.beginTransaction();
-    const tournament = await loadTournament(connection, tournamentId);
-    if (!tournament) throw new Error("TOURNAMENT_NOT_FOUND");
-    if (!tournament.venue_id) throw new Error("TOURNAMENT_VENUE_REQUIRED");
-
-    const settings = parseObject(tournament.game_settings);
-    const duration = Math.round(safeNumber(
-      settings.matchDurationMin ?? settings.durationMin,
-      30,
-      5,
-      240
-    ));
-    const requiredType = String(
-      settings.resourceType || (tournament.game_slug.includes("back") ? "table" : "ps5")
-    ).toLowerCase();
-    const [resourceRows] = await connection.query<Array<RowDataPacket & { id: number; type: string }>>(`
-      SELECT id,type
-      FROM resources
-      WHERE venue_id=? AND is_active=1 AND status='available'
-      ORDER BY id
-      FOR UPDATE
-    `, [tournament.venue_id]);
-    const compatible = resourceRows.filter((row) => String(row.type).toLowerCase().includes(requiredType));
-    const resources = compatible.length ? compatible : resourceRows;
-    if (!resources.length) throw new Error("NO_RESOURCES");
-
-    const [matches] = await connection.query<Array<RowDataPacket & {
-      id: number;
-      round_number: number;
-      stage: string;
-      match_number: number;
-    }>>(`
-      SELECT m.id,COALESCE(r.round_number,1) AS round_number,
-             COALESCE(r.stage,'round') AS stage,m.match_number
-      FROM tournament_matches m
-      LEFT JOIN tournament_rounds r ON r.id=m.round_id
-      WHERE m.tournament_id=?
-        AND m.status IN ('PENDING','READY')
-        AND m.scheduled_at IS NULL
-      ORDER BY COALESCE(r.round_number,1),COALESCE(r.stage,'round'),m.match_number
-      FOR UPDATE
-    `, [tournament.id]);
-
-    if (!matches.length) {
-      await connection.commit();
-      return { scheduled: 0, resources: resources.length, duration };
-    }
-
-    const matchIds = matches.map((match) => Number(match.id));
-    const placeholders = matchIds.map(() => "?").join(",");
-    const [participantRows] = await connection.query<Array<RowDataPacket & {
-      match_id: number;
-      player_id: number | null;
-      team_id: number | null;
-    }>>(`
-      SELECT match_id,player_id,team_id
-      FROM match_participants
-      WHERE match_id IN (${placeholders})
-    `, matchIds);
-    const matchParticipants = new Map<number, Set<string>>();
-    for (const participant of participantRows) {
-      const keys = matchParticipants.get(Number(participant.match_id)) || new Set<string>();
-      keys.add(participantKey(participant.player_id, participant.team_id));
-      matchParticipants.set(Number(participant.match_id), keys);
-    }
-
-    const [existingRows] = await connection.query<Array<RowDataPacket & {
-      id: number;
-      resource_id: number | null;
-      scheduled_at: Date;
-      duration_min: number | null;
-      player_id: number | null;
-      team_id: number | null;
-    }>>(`
-      SELECT m.id,m.resource_id,m.scheduled_at,m.duration_min,mp.player_id,mp.team_id
-      FROM tournament_matches m
-      JOIN tournaments t ON t.id=m.tournament_id
-      LEFT JOIN match_participants mp ON mp.match_id=m.id
-      WHERE t.venue_id=?
-        AND m.status NOT IN ('CANCELLED','COMPLETED')
-        AND m.scheduled_at IS NOT NULL
-    `, [tournament.venue_id]);
-
-    type BusyWindow = { start: number; end: number };
-    const resourceBusy = new Map<number, BusyWindow[]>();
-    const participantBusy = new Map<string, BusyWindow[]>();
-    for (const row of existingRows) {
-      const startAt = new Date(row.scheduled_at).getTime();
-      const endAt = startAt + Number(row.duration_min || duration) * 60_000;
-      if (row.resource_id) {
-        const list = resourceBusy.get(Number(row.resource_id)) || [];
-        list.push({ start: startAt, end: endAt });
-        resourceBusy.set(Number(row.resource_id), list);
-      }
-      if (row.player_id || row.team_id) {
-        const key = participantKey(row.player_id, row.team_id);
-        const list = participantBusy.get(key) || [];
-        list.push({ start: startAt, end: endAt });
-        participantBusy.set(key, list);
-      }
-    }
-
-    const overlaps = (windows: BusyWindow[] | undefined, startAt: number, endAt: number) =>
-      Boolean(windows?.some((window) => window.start < endAt && window.end > startAt));
-
-    let currentRoundKey = "";
-    let roundStart = Math.max(new Date(tournament.starts_at).getTime(), Date.now());
-    let roundEnd = roundStart;
-    for (const match of matches) {
-      const isGroup = String(match.stage).startsWith("group_");
-      const roundKey = isGroup
-        ? `groups:${match.round_number}`
-        : `${match.stage}:${match.round_number}`;
-      if (roundKey !== currentRoundKey) {
-        if (currentRoundKey) roundStart = Math.max(roundStart + duration * 60_000, roundEnd);
-        currentRoundKey = roundKey;
-        roundEnd = roundStart;
-      }
-
-      const participantKeys = matchParticipants.get(Number(match.id)) || new Set<string>();
-      let candidateStart = roundStart;
-      let selectedResource: number | null = null;
-      for (let attempt = 0; attempt < 10_000 && selectedResource === null; attempt += 1) {
-        const candidateEnd = candidateStart + duration * 60_000;
-        const participantsAvailable = [...participantKeys].every(
-          (key) => !overlaps(participantBusy.get(key), candidateStart, candidateEnd)
-        );
-        if (participantsAvailable) {
-          const resource = resources.find(
-            (item) => !overlaps(resourceBusy.get(Number(item.id)), candidateStart, candidateEnd)
-          );
-          if (resource) selectedResource = Number(resource.id);
-        }
-        if (selectedResource === null) candidateStart += duration * 60_000;
-      }
-      if (selectedResource === null) throw new Error("SCHEDULE_SLOT_NOT_FOUND");
-
-      const candidateEnd = candidateStart + duration * 60_000;
-      await connection.execute(`
-        UPDATE tournament_matches
-        SET resource_id=?,scheduled_at=?,duration_min=?,status='READY'
-        WHERE id=?
-      `, [selectedResource, new Date(candidateStart), duration, match.id]);
-
-      const resourceWindows = resourceBusy.get(selectedResource) || [];
-      resourceWindows.push({ start: candidateStart, end: candidateEnd });
-      resourceBusy.set(selectedResource, resourceWindows);
-      for (const key of participantKeys) {
-        const windows = participantBusy.get(key) || [];
-        windows.push({ start: candidateStart, end: candidateEnd });
-        participantBusy.set(key, windows);
-      }
-      roundEnd = Math.max(roundEnd, candidateEnd);
-    }
-
-    await connection.commit();
-    return { scheduled: matches.length, resources: resources.length, duration };
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
 }
 
 function boardDateCondition(periodType: string, periodKey: string) {

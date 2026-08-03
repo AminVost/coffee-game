@@ -1,0 +1,1371 @@
+diff --git a/src/app/api/account/payments/[id]/route.ts b/src/app/api/account/payments/[id]/route.ts
+index dd8560d0ca9b2ce360f4a8f0cfab4cbd7c3da352..0f80cf13f905e99f3b0ae75eaa006c06eadf38f9 100644
+--- a/src/app/api/account/payments/[id]/route.ts
++++ b/src/app/api/account/payments/[id]/route.ts
+@@ -3,8 +3,8 @@ import { z } from "zod";
+ import type { RowDataPacket } from "mysql2";
+ import { authorize } from "@/lib/authorization";
+ import { writeAuditLog } from "@/lib/audit";
+-import { db, queryRows } from "@/lib/db";
+-import { expireStaleRegistrationStateNow } from "@/lib/registration-flow";
++import { db } from "@/lib/db";
++import { expireStaleRegistrationState } from "@/lib/registration-flow";
+ 
+ const schema = z.object({
+   payerName: z.string().trim().min(2).max(120),
+@@ -23,6 +23,7 @@ type PaymentRow = RowDataPacket & {
+   user_id: number | null;
+   buyer_user_id: number | null;
+   correction_expires_at: Date | null;
++  registration_status: string;
+ };
+ 
+ type DuplicateRow = RowDataPacket & { id: number };
+@@ -30,6 +31,7 @@ type DuplicateRow = RowDataPacket & { id: number };
+ function isReasonablePaymentDate(value: string) {
+   const date = new Date(`${value}T12:00:00`);
+   if (Number.isNaN(date.getTime())) return false;
++
+   const now = new Date();
+   const oldest = new Date(now);
+   oldest.setDate(oldest.getDate() - 30);
+@@ -38,9 +40,16 @@ function isReasonablePaymentDate(value: string) {
+   return date >= oldest && date <= newest;
+ }
+ 
+-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
++export async function PATCH(
++  request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
+   const auth = await authorize();
+   if (auth.response) return auth.response;
++  const currentUser = auth.user;
++  if (!currentUser) {
++    return NextResponse.json({ message: "ابتدا وارد حساب کاربری شوید." }, { status: 401 });
++  }
+ 
+   try {
+     const input = schema.parse(await request.json());
+@@ -50,53 +59,93 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+       return NextResponse.json({ message: "تاریخ واریز نامعتبر است." }, { status: 422 });
+     }
+ 
+-    await expireStaleRegistrationStateNow();
+-
+-    const rows = await queryRows<PaymentRow[]>(`
+-      SELECT p.id,p.registration_id,p.method,p.amount,p.status,p.user_id,
+-             r.buyer_user_id,p.correction_expires_at
+-      FROM payments p
+-      JOIN registrations r ON r.id=p.registration_id
+-      WHERE (p.id=? OR p.public_id=?)
+-      LIMIT 1
+-    `, [/^\d+$/.test(id) ? Number(id) : 0, id]);
+-    const payment = rows[0];
+-    if (!payment) return NextResponse.json({ message: "پرداخت یافت نشد." }, { status: 404 });
+-
+-    const ownsPayment = String(payment.user_id || payment.buyer_user_id || "") === auth.user.id;
+-    if (!ownsPayment) return NextResponse.json({ message: "دسترسی غیرمجاز است." }, { status: 403 });
+-    if (payment.method !== "card_to_card") {
+-      return NextResponse.json({ message: "ثبت اطلاعات انتقال فقط برای روش کارت‌به‌کارت ممکن است." }, { status: 409 });
+-    }
+-    if (["APPROVED", "REFUNDED", "CANCELLED", "REJECTED", "EXPIRED"].includes(payment.status)) {
+-      return NextResponse.json({ message: "این پرداخت نهایی شده و قابل ویرایش نیست." }, { status: 409 });
+-    }
+-    if (
+-      payment.status === "NEEDS_CORRECTION"
+-      && payment.correction_expires_at
+-      && new Date(payment.correction_expires_at).getTime() <= Date.now()
+-    ) {
+-      return NextResponse.json({ message: "مهلت اصلاح اطلاعات پرداخت به پایان رسیده است." }, { status: 410 });
+-    }
+-
+-    const duplicates = await queryRows<DuplicateRow[]>(`
+-      SELECT id
+-      FROM payments
+-      WHERE id<>?
+-        AND method='card_to_card'
+-        AND tracking_code=?
+-        AND payer_card_last4=?
+-        AND amount=?
+-        AND status NOT IN ('REJECTED','CANCELLED','EXPIRED')
+-      LIMIT 1
+-    `, [payment.id, input.trackingCode.trim(), input.cardLast4, payment.amount]);
+-    if (duplicates.length) {
+-      return NextResponse.json({ message: "این کد پیگیری با همین کارت و مبلغ قبلاً ثبت شده است." }, { status: 409 });
+-    }
+-
+     const connection = await db.getConnection();
++    let payment: PaymentRow | null = null;
++
+     try {
+       await connection.beginTransaction();
++      await expireStaleRegistrationState(connection);
++
++      const [rows] = await connection.query<PaymentRow[]>(`
++        SELECT
++          p.id,p.registration_id,p.method,p.amount,p.status,p.user_id,
++          r.buyer_user_id,p.correction_expires_at,r.status AS registration_status
++        FROM payments p
++        JOIN registrations r ON r.id=p.registration_id
++        WHERE (p.id=? OR p.public_id=?)
++        LIMIT 1
++        FOR UPDATE
++      `, [/^\d+$/.test(id) ? Number(id) : 0, id]);
++
++      payment = rows[0] || null;
++      if (!payment) {
++        await connection.rollback();
++        return NextResponse.json({ message: "پرداخت یافت نشد." }, { status: 404 });
++      }
++
++      const ownsPayment = String(payment.user_id || payment.buyer_user_id || "") === currentUser.id;
++      if (!ownsPayment) {
++        await connection.rollback();
++        return NextResponse.json({ message: "دسترسی غیرمجاز است." }, { status: 403 });
++      }
++
++      if (payment.method !== "card_to_card") {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "ثبت اطلاعات انتقال فقط برای روش کارت‌به‌کارت ممکن است."
++        }, { status: 409 });
++      }
++
++      if (!["PENDING", "NEEDS_CORRECTION"].includes(payment.status)) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "این پرداخت نهایی شده و قابل ویرایش نیست."
++        }, { status: 409 });
++      }
++
++      if (!["PENDING_APPROVAL", "NEEDS_CORRECTION"].includes(payment.registration_status)) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "وضعیت ثبت‌نام با ویرایش اطلاعات پرداخت سازگار نیست. صفحه را تازه‌سازی کنید."
++        }, { status: 409 });
++      }
++
++      if (
++        payment.status === "NEEDS_CORRECTION"
++        && payment.correction_expires_at
++        && new Date(payment.correction_expires_at).getTime() <= Date.now()
++      ) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "مهلت اصلاح اطلاعات پرداخت به پایان رسیده است."
++        }, { status: 410 });
++      }
++
++      const [duplicates] = await connection.query<DuplicateRow[]>(`
++        SELECT id
++        FROM payments
++        WHERE id<>?
++          AND method='card_to_card'
++          AND tracking_code=?
++          AND payer_card_last4=?
++          AND amount=?
++          AND status NOT IN ('REJECTED','CANCELLED','EXPIRED')
++        LIMIT 1
++        FOR UPDATE
++      `, [
++        payment.id,
++        input.trackingCode.trim(),
++        input.cardLast4,
++        payment.amount
++      ]);
++
++      if (duplicates.length) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "این کد پیگیری با همین کارت و مبلغ قبلاً ثبت شده است."
++        }, { status: 409 });
++      }
++
+       await connection.execute(`
+         UPDATE payments
+         SET payer_name=?,payer_card_last4=?,tracking_code=?,paid_on=?,paid_time=?,
+@@ -111,10 +160,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+         input.paidTime || null,
+         payment.id
+       ]);
++
+       await connection.execute(`
+         UPDATE registrations
+         SET status='PENDING_APPROVAL',correction_expires_at=NULL,updated_at=NOW()
+-        WHERE id=? AND status NOT IN ('CANCELLED','REJECTED','WAITLISTED','EXPIRED')
++        WHERE id=?
+       `, [payment.registration_id]);
+ 
+       await connection.execute(`
+@@ -123,7 +173,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+           ur.user_id,
+           'admin_payment_resubmitted',
+           'اطلاعات پرداخت دوباره ارسال شد',
+-          'کاربر اطلاعات پرداخت اصلاح‌شده را برای بررسی ارسال کرد.',
++          'کاربر اطلاعات پرداخت را برای بررسی ارسال کرد.',
+           ?,
+           NOW()
+         FROM user_roles ur
+@@ -147,13 +197,17 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+     }
+ 
+     await writeAuditLog({
+-      actorUserId: auth.user.id,
++      actorUserId: currentUser.id,
+       action: "payment.details_submitted",
+       entityType: "payment",
+-      entityId: payment.id,
+-      oldData: { status: payment.status },
++      entityId: payment!.id,
++      oldData: {
++        paymentStatus: payment!.status,
++        registrationStatus: payment!.registration_status
++      },
+       newData: {
+-        status: "PENDING",
++        paymentStatus: "PENDING",
++        registrationStatus: "PENDING_APPROVAL",
+         payerName: input.payerName.trim(),
+         cardLast4: input.cardLast4,
+         trackingCode: input.trackingCode.trim(),
+@@ -163,10 +217,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+       request
+     });
+ 
+-    return NextResponse.json({ ok: true, status: "PENDING", submittedAt: new Date().toISOString() });
++    return NextResponse.json({
++      ok: true,
++      status: "PENDING",
++      submittedAt: new Date().toISOString()
++    });
+   } catch (error) {
+     if (error instanceof z.ZodError) {
+-      return NextResponse.json({ message: "اطلاعات انتقال بانکی نامعتبر است.", errors: error.issues }, { status: 422 });
++      return NextResponse.json({
++        message: "اطلاعات انتقال بانکی نامعتبر است."
++      }, { status: 422 });
+     }
+     console.error("account.payment.update.failed", error);
+     return NextResponse.json({ message: "ثبت اطلاعات پرداخت انجام نشد." }, { status: 500 });
+diff --git a/src/app/api/admin/payments/[id]/route.ts b/src/app/api/admin/payments/[id]/route.ts
+index a2035aaf3631642826c68b04bd240ff32da1df16..159ffbd96e0706294ce7221f4e92b2dc3f262eee 100644
+--- a/src/app/api/admin/payments/[id]/route.ts
++++ b/src/app/api/admin/payments/[id]/route.ts
+@@ -1,85 +1,353 @@
+-import { NextResponse } from "next/server";
+-import { z } from "zod";
+-import type { RowDataPacket } from "mysql2";
+-import { authorize } from "@/lib/authorization";
+-import { writeAuditLog } from "@/lib/audit";
+-import { db } from "@/lib/db";
+-import { expireStaleRegistrationState } from "@/lib/registration-flow";
+-import { sendPaymentStatusSms } from "@/lib/sms";
+-import { getRuntimeSettings } from "@/lib/runtime-settings";
+-import { createNotification } from "@/lib/notifications";
+-import { offerNextWaitlistEntries } from "@/lib/waitlist";
+-
+-const schema = z.discriminatedUnion("action", [
+-  z.object({ action: z.literal("approve") }),
+-  z.object({ action: z.literal("request_correction"), reason: z.string().trim().min(3).max(500) }),
+-  z.object({ action: z.literal("reject"), reason: z.string().trim().min(3).max(500) })
+-]);
+-
+-type PaymentRow = RowDataPacket & {
+-  id:number; status:string; method:string; registration_id:number; registration_status:string;
+-  tournament_id:number; registration_slots:number; tournament_capacity:number; buyer_user_id:number|null;
+-  contact_mobile:string|null; payer_name:string|null; payer_card_last4:string|null; tracking_code:string|null;
+-  paid_on:string|Date|null; tournament_title:string;
+-};
+-type CountRow = RowDataPacket & { occupied_slots:number };
+-
+-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+-  const auth = await authorize("payments.approve"); if (auth.response) return auth.response;
+-  try {
+-    const input = schema.parse(await request.json()); const { id } = await params;
+-    const runtime = await getRuntimeSettings(); const connection = await db.getConnection();
+-    let payment: PaymentRow | null = null; let nextStatus: "APPROVED"|"NEEDS_CORRECTION"|"REJECTED";
+-    try {
+-      await connection.beginTransaction(); await expireStaleRegistrationState(connection);
+-      const [rows] = await connection.query<PaymentRow[]>(`
+-        SELECT p.id,p.status,p.method,p.registration_id,r.status AS registration_status,r.tournament_id,
+-          r.slots AS registration_slots,t.capacity AS tournament_capacity,COALESCE(p.user_id,r.buyer_user_id) AS buyer_user_id,
+-          r.contact_mobile,p.payer_name,p.payer_card_last4,p.tracking_code,p.paid_on,t.title AS tournament_title
+-        FROM payments p JOIN registrations r ON r.id=p.registration_id JOIN tournaments t ON t.id=r.tournament_id
+-        WHERE p.id=? LIMIT 1 FOR UPDATE
+-      `,[id]); payment=rows[0]||null;
+-      if(!payment){await connection.rollback();return NextResponse.json({message:"پرداخت یافت نشد."},{status:404});}
+-      if(["APPROVED","REFUNDED","CANCELLED","REJECTED","EXPIRED"].includes(payment.status) || ["CANCELLED","REJECTED","EXPIRED"].includes(payment.registration_status)){
+-        await connection.rollback();return NextResponse.json({message:"این پرداخت قبلاً نهایی شده است."},{status:409});
+-      }
+-      if(input.action==="approve"){
+-        if(payment.method==="card_to_card" && !(payment.payer_name&&payment.payer_card_last4&&payment.tracking_code&&payment.paid_on)){
+-          await connection.rollback();return NextResponse.json({message:"اطلاعات انتقال بانکی کامل نیست و قابل تأیید نیست."},{status:422});
+-        }
+-        await connection.query(`SELECT id FROM tournaments WHERE id=? FOR UPDATE`,[payment.tournament_id]);
+-        const [countRows]=await connection.query<CountRow[]>(`SELECT
+-          (SELECT COALESCE(SUM(CASE WHEN status IN ('RESERVED','PENDING_APPROVAL','CONFIRMED','CHECKED_IN') THEN slots WHEN status='PENDING_PAYMENT' AND (reserved_until IS NULL OR reserved_until>NOW()) THEN slots WHEN status='NEEDS_CORRECTION' AND correction_expires_at>NOW() THEN slots ELSE 0 END),0) FROM registrations WHERE tournament_id=? AND id<>? AND deleted_at IS NULL)
+-          +(SELECT COALESCE(SUM(slots),0) FROM registration_holds WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW())
+-          +(SELECT COALESCE(SUM(slots),0) FROM waitlist_entries WHERE tournament_id=? AND status='OFFERED' AND offer_expires_at>NOW()) AS occupied_slots`,[payment.tournament_id,payment.registration_id,payment.tournament_id,payment.tournament_id]);
+-        if(Number(countRows[0]?.occupied_slots||0)+Number(payment.registration_slots)>Number(payment.tournament_capacity)){
+-          await connection.rollback();return NextResponse.json({message:"ظرفیت مسابقه تکمیل شده و این پرداخت قابل تأیید نیست."},{status:409});
+-        }
+-        await connection.execute(`UPDATE payments SET status='APPROVED',approved_by=?,approved_at=NOW(),rejected_reason=NULL,correction_expires_at=NULL,updated_at=NOW() WHERE id=?`,[auth.user.id,payment.id]);
+-        await connection.execute(`UPDATE registrations SET status='CONFIRMED',reserved_until=NULL,correction_expires_at=NULL,updated_at=NOW() WHERE id=?`,[payment.registration_id]);
+-        await connection.execute(`UPDATE registration_entries SET confirmed_at=COALESCE(confirmed_at,NOW()) WHERE registration_id=?`,[payment.registration_id]);
+-        await createNotification({connection,userId:payment.buyer_user_id,type:"payment_approved",title:"پرداخت تأیید شد",body:`پرداخت ثبت‌نام مسابقه ${payment.tournament_title} تأیید شد.`,data:{paymentId:payment.id,registrationId:payment.registration_id}});
+-        nextStatus="APPROVED";
+-      }else if(input.action==="request_correction"){
+-        const expiresAt=new Date(Date.now()+runtime.registration.correctionHours*3600000);
+-        await connection.execute(`UPDATE payments SET status='NEEDS_CORRECTION',approved_by=NULL,approved_at=NULL,rejected_reason=?,correction_expires_at=?,updated_at=NOW() WHERE id=?`,[input.reason,expiresAt,payment.id]);
+-        await connection.execute(`UPDATE registrations SET status='NEEDS_CORRECTION',correction_expires_at=?,updated_at=NOW() WHERE id=?`,[expiresAt,payment.registration_id]);
+-        await createNotification({connection,userId:payment.buyer_user_id,type:"payment_needs_correction",title:"اطلاعات پرداخت نیاز به اصلاح دارد",body:`پرداخت مسابقه ${payment.tournament_title} نیاز به اصلاح دارد: ${input.reason}`,data:{paymentId:payment.id,registrationId:payment.registration_id,correctionExpiresAt:expiresAt.toISOString()}});
+-        nextStatus="NEEDS_CORRECTION";
+-      }else{
+-        await connection.execute(`UPDATE payments SET status='REJECTED',approved_by=NULL,approved_at=NULL,rejected_reason=?,correction_expires_at=NULL,updated_at=NOW() WHERE id=?`,[input.reason,payment.id]);
+-        await connection.execute(`UPDATE registrations SET status='REJECTED',reserved_until=NULL,correction_expires_at=NULL,updated_at=NOW() WHERE id=?`,[payment.registration_id]);
+-        await connection.execute(`UPDATE registration_entries SET confirmed_at=NULL WHERE registration_id=?`,[payment.registration_id]);
+-        await createNotification({connection,userId:payment.buyer_user_id,type:"payment_rejected",title:"پرداخت رد شد",body:`پرداخت مسابقه ${payment.tournament_title} رد شد: ${input.reason}`,data:{paymentId:payment.id,registrationId:payment.registration_id}});
+-        await offerNextWaitlistEntries(connection,payment.tournament_id); nextStatus="REJECTED";
+-      }
+-      await connection.commit();
+-    }catch(error){await connection.rollback();throw error;}finally{connection.release();}
+-
+-    if(payment?.contact_mobile && nextStatus!=="NEEDS_CORRECTION"){
+-      try{await sendPaymentStatusSms({mobile:payment.contact_mobile,tournamentTitle:payment.tournament_title,status:nextStatus,reason:input.action==="reject"?input.reason:null});}catch(error){console.error("payment.status.sms.failed",error);}
+-    }
+-    await writeAuditLog({actorUserId:auth.user.id,action:input.action==="approve"?"payment.approved":input.action==="request_correction"?"payment.correction_requested":"payment.rejected",entityType:"payment",entityId:payment!.id,oldData:{status:payment!.status},newData:{status:nextStatus,reason:input.action==="approve"?null:input.reason},request});
+-    return NextResponse.json({ok:true,status:nextStatus});
+-  }catch(error){if(error instanceof z.ZodError)return NextResponse.json({message:"اطلاعات عملیات پرداخت نامعتبر است."},{status:422});console.error("admin.payment.update.failed",error);return NextResponse.json({message:"تغییر وضعیت پرداخت انجام نشد."},{status:500});}
+-}
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import type { RowDataPacket } from "mysql2";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import { db } from "@/lib/db";
++import { expireStaleRegistrationState } from "@/lib/registration-flow";
++import { sendPaymentStatusSms } from "@/lib/sms";
++import { getRuntimeSettings } from "@/lib/runtime-settings";
++import { createNotification } from "@/lib/notifications";
++import { offerNextWaitlistEntries } from "@/lib/waitlist";
++
++const schema = z.discriminatedUnion("action", [
++  z.object({ action: z.literal("approve") }),
++  z.object({
++    action: z.literal("request_correction"),
++    reason: z.string().trim().min(3).max(500)
++  }),
++  z.object({
++    action: z.literal("reject"),
++    reason: z.string().trim().min(3).max(500)
++  })
++]);
++
++type PaymentRow = RowDataPacket & {
++  id: number;
++  status: string;
++  method: string;
++  registration_id: number;
++  registration_status: string;
++  tournament_id: number;
++  registration_slots: number;
++  tournament_capacity: number;
++  buyer_user_id: number | null;
++  contact_mobile: string | null;
++  payer_name: string | null;
++  payer_card_last4: string | null;
++  tracking_code: string | null;
++  paid_on: string | Date | null;
++  submitted_at: Date | null;
++  tournament_title: string;
++};
++
++type CountRow = RowDataPacket & { occupied_slots: number };
++
++type NextStatus = "APPROVED" | "NEEDS_CORRECTION" | "REJECTED";
++
++const finalPaymentStatuses = ["APPROVED", "REFUNDED", "CANCELLED", "REJECTED", "EXPIRED"];
++const finalRegistrationStatuses = ["CANCELLED", "REJECTED", "EXPIRED"];
++
++function paymentCanBeApproved(payment: PaymentRow) {
++  if (payment.status !== "PENDING") return false;
++  if (payment.method === "card_to_card") {
++    return payment.registration_status === "PENDING_APPROVAL" && Boolean(payment.submitted_at);
++  }
++  if (["pos", "cash"].includes(payment.method)) {
++    return payment.registration_status === "PENDING_PAYMENT";
++  }
++  return false;
++}
++
++function paymentCanRequestCorrection(payment: PaymentRow) {
++  return payment.method === "card_to_card"
++    && payment.status === "PENDING"
++    && payment.registration_status === "PENDING_APPROVAL"
++    && Boolean(payment.submitted_at);
++}
++
++function paymentCanBeRejected(payment: PaymentRow) {
++  if (payment.status === "NEEDS_CORRECTION") {
++    return payment.registration_status === "NEEDS_CORRECTION";
++  }
++  if (payment.status !== "PENDING") return false;
++  if (payment.method === "card_to_card") {
++    return payment.registration_status === "PENDING_APPROVAL" && Boolean(payment.submitted_at);
++  }
++  return ["pos", "cash"].includes(payment.method)
++    && payment.registration_status === "PENDING_PAYMENT";
++}
++
++export async function PATCH(
++  request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("payments.approve");
++  if (auth.response) return auth.response;
++  const actor = auth.user;
++  if (!actor) {
++    return NextResponse.json({ message: "دسترسی غیرمجاز است." }, { status: 401 });
++  }
++
++  try {
++    const input = schema.parse(await request.json());
++    const { id } = await params;
++    const runtime = await getRuntimeSettings();
++    const connection = await db.getConnection();
++
++    let payment: PaymentRow | null = null;
++    let nextStatus: NextStatus;
++
++    try {
++      await connection.beginTransaction();
++      await expireStaleRegistrationState(connection);
++
++      const [rows] = await connection.query<PaymentRow[]>(`
++        SELECT
++          p.id,p.status,p.method,p.registration_id,p.submitted_at,
++          r.status AS registration_status,r.tournament_id,r.slots AS registration_slots,
++          t.capacity AS tournament_capacity,
++          COALESCE(p.user_id,r.buyer_user_id) AS buyer_user_id,
++          r.contact_mobile,p.payer_name,p.payer_card_last4,p.tracking_code,p.paid_on,
++          t.title AS tournament_title
++        FROM payments p
++        JOIN registrations r ON r.id=p.registration_id
++        JOIN tournaments t ON t.id=r.tournament_id
++        WHERE p.id=?
++        LIMIT 1
++        FOR UPDATE
++      `, [id]);
++
++      payment = rows[0] || null;
++      if (!payment) {
++        await connection.rollback();
++        return NextResponse.json({ message: "پرداخت یافت نشد." }, { status: 404 });
++      }
++
++      if (
++        finalPaymentStatuses.includes(payment.status)
++        || finalRegistrationStatuses.includes(payment.registration_status)
++      ) {
++        await connection.rollback();
++        return NextResponse.json({ message: "این پرداخت قبلاً نهایی شده است." }, { status: 409 });
++      }
++
++      if (input.action === "approve") {
++        if (!paymentCanBeApproved(payment)) {
++          await connection.rollback();
++          return NextResponse.json({
++            message: payment.status === "NEEDS_CORRECTION"
++              ? "ابتدا کاربر باید اطلاعات اصلاح‌شده را دوباره ارسال کند."
++              : "وضعیت این پرداخت برای تأیید آماده نیست."
++          }, { status: 409 });
++        }
++
++        if (
++          payment.method === "card_to_card"
++          && !(payment.payer_name && payment.payer_card_last4 && payment.tracking_code && payment.paid_on)
++        ) {
++          await connection.rollback();
++          return NextResponse.json({
++            message: "اطلاعات انتقال بانکی کامل نیست و قابل تأیید نیست."
++          }, { status: 422 });
++        }
++
++        await connection.query(`SELECT id FROM tournaments WHERE id=? FOR UPDATE`, [
++          payment.tournament_id
++        ]);
++
++        const [countRows] = await connection.query<CountRow[]>(`
++          SELECT
++            (
++              SELECT COALESCE(SUM(
++                CASE
++                  WHEN status IN ('RESERVED','PENDING_APPROVAL','CONFIRMED','CHECKED_IN') THEN slots
++                  WHEN status='PENDING_PAYMENT' AND (reserved_until IS NULL OR reserved_until>NOW()) THEN slots
++                  WHEN status='NEEDS_CORRECTION' AND correction_expires_at>NOW() THEN slots
++                  ELSE 0
++                END
++              ),0)
++              FROM registrations
++              WHERE tournament_id=? AND id<>? AND deleted_at IS NULL
++            )
++            +(
++              SELECT COALESCE(SUM(slots),0)
++              FROM registration_holds
++              WHERE tournament_id=? AND status='ACTIVE' AND expires_at>NOW()
++            )
++            +(
++              SELECT COALESCE(SUM(slots),0)
++              FROM waitlist_entries
++              WHERE tournament_id=? AND status='OFFERED' AND offer_expires_at>NOW()
++            ) AS occupied_slots
++        `, [
++          payment.tournament_id,
++          payment.registration_id,
++          payment.tournament_id,
++          payment.tournament_id
++        ]);
++
++        if (
++          Number(countRows[0]?.occupied_slots || 0) + Number(payment.registration_slots)
++          > Number(payment.tournament_capacity)
++        ) {
++          await connection.rollback();
++          return NextResponse.json({
++            message: "ظرفیت مسابقه تکمیل شده و این پرداخت قابل تأیید نیست."
++          }, { status: 409 });
++        }
++
++        await connection.execute(`
++          UPDATE payments
++          SET status='APPROVED',approved_by=?,approved_at=NOW(),rejected_reason=NULL,
++              correction_expires_at=NULL,updated_at=NOW()
++          WHERE id=?
++        `, [actor.id, payment.id]);
++
++        await connection.execute(`
++          UPDATE registrations
++          SET status='CONFIRMED',reserved_until=NULL,correction_expires_at=NULL,updated_at=NOW()
++          WHERE id=?
++        `, [payment.registration_id]);
++
++        await connection.execute(`
++          UPDATE registration_entries
++          SET confirmed_at=COALESCE(confirmed_at,NOW())
++          WHERE registration_id=?
++        `, [payment.registration_id]);
++
++        await createNotification({
++          connection,
++          userId: payment.buyer_user_id,
++          type: "payment_approved",
++          title: "پرداخت تأیید شد",
++          body: `پرداخت ثبت‌نام مسابقه ${payment.tournament_title} تأیید شد.`,
++          data: { paymentId: payment.id, registrationId: payment.registration_id }
++        });
++
++        nextStatus = "APPROVED";
++      } else if (input.action === "request_correction") {
++        if (!paymentCanRequestCorrection(payment)) {
++          await connection.rollback();
++          return NextResponse.json({
++            message: "درخواست اصلاح فقط برای انتقال بانکی ارسال‌شده و در انتظار بررسی ممکن است."
++          }, { status: 409 });
++        }
++
++        const expiresAt = new Date(Date.now() + runtime.registration.correctionHours * 3_600_000);
++
++        await connection.execute(`
++          UPDATE payments
++          SET status='NEEDS_CORRECTION',approved_by=NULL,approved_at=NULL,rejected_reason=?,
++              correction_expires_at=?,updated_at=NOW()
++          WHERE id=?
++        `, [input.reason, expiresAt, payment.id]);
++
++        await connection.execute(`
++          UPDATE registrations
++          SET status='NEEDS_CORRECTION',correction_expires_at=?,updated_at=NOW()
++          WHERE id=?
++        `, [expiresAt, payment.registration_id]);
++
++        await createNotification({
++          connection,
++          userId: payment.buyer_user_id,
++          type: "payment_needs_correction",
++          title: "اطلاعات پرداخت نیاز به اصلاح دارد",
++          body: `پرداخت مسابقه ${payment.tournament_title} نیاز به اصلاح دارد: ${input.reason}`,
++          data: {
++            paymentId: payment.id,
++            registrationId: payment.registration_id,
++            correctionExpiresAt: expiresAt.toISOString()
++          }
++        });
++
++        nextStatus = "NEEDS_CORRECTION";
++      } else {
++        if (!paymentCanBeRejected(payment)) {
++          await connection.rollback();
++          return NextResponse.json({
++            message: "وضعیت این پرداخت اجازه رد نهایی را نمی‌دهد."
++          }, { status: 409 });
++        }
++
++        await connection.execute(`
++          UPDATE payments
++          SET status='REJECTED',approved_by=NULL,approved_at=NULL,rejected_reason=?,
++              correction_expires_at=NULL,updated_at=NOW()
++          WHERE id=?
++        `, [input.reason, payment.id]);
++
++        await connection.execute(`
++          UPDATE registrations
++          SET status='REJECTED',reserved_until=NULL,correction_expires_at=NULL,updated_at=NOW()
++          WHERE id=?
++        `, [payment.registration_id]);
++
++        await connection.execute(`
++          UPDATE registration_entries SET confirmed_at=NULL WHERE registration_id=?
++        `, [payment.registration_id]);
++
++        await createNotification({
++          connection,
++          userId: payment.buyer_user_id,
++          type: "payment_rejected",
++          title: "پرداخت رد شد",
++          body: `پرداخت مسابقه ${payment.tournament_title} رد شد: ${input.reason}`,
++          data: { paymentId: payment.id, registrationId: payment.registration_id }
++        });
++
++        await offerNextWaitlistEntries(connection, payment.tournament_id);
++        nextStatus = "REJECTED";
++      }
++
++      await connection.commit();
++    } catch (error) {
++      await connection.rollback();
++      throw error;
++    } finally {
++      connection.release();
++    }
++
++    if (payment?.contact_mobile && nextStatus !== "NEEDS_CORRECTION") {
++      try {
++        await sendPaymentStatusSms({
++          mobile: payment.contact_mobile,
++          tournamentTitle: payment.tournament_title,
++          status: nextStatus,
++          reason: input.action === "reject" ? input.reason : null
++        });
++      } catch (error) {
++        console.error("payment.status.sms.failed", error);
++      }
++    }
++
++    await writeAuditLog({
++      actorUserId: actor.id,
++      action: input.action === "approve"
++        ? "payment.approved"
++        : input.action === "request_correction"
++          ? "payment.correction_requested"
++          : "payment.rejected",
++      entityType: "payment",
++      entityId: payment!.id,
++      oldData: {
++        paymentStatus: payment!.status,
++        registrationStatus: payment!.registration_status
++      },
++      newData: {
++        status: nextStatus,
++        reason: input.action === "approve" ? null : input.reason
++      },
++      request
++    });
++
++    return NextResponse.json({ ok: true, status: nextStatus });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({ message: "اطلاعات عملیات پرداخت نامعتبر است." }, { status: 422 });
++    }
++    console.error("admin.payment.update.failed", error);
++    return NextResponse.json({ message: "تغییر وضعیت پرداخت انجام نشد." }, { status: 500 });
++  }
++}
+diff --git a/src/app/api/admin/payments/route.ts b/src/app/api/admin/payments/route.ts
+index 9871d2be23058cf493b3475635c5ce2efa9b7f52..0de8100b451c97876a27f919e03941662152f38a 100644
+--- a/src/app/api/admin/payments/route.ts
++++ b/src/app/api/admin/payments/route.ts
+@@ -17,6 +17,7 @@ type PaymentRow = RowDataPacket & {
+   method: string;
+   amount: number;
+   status: string;
++  registration_status: string;
+   payer_card_last4: string | null;
+   tracking_code: string | null;
+   paid_on: string | Date | null;
+@@ -52,7 +53,7 @@ export async function GET() {
+       GROUP_CONCAT(DISTINCT COALESCE(pl.name,tp.name,tm.title) ORDER BY COALESCE(pl.name,tp.name,tm.title) SEPARATOR '، ') AS participant_names,
+       GROUP_CONCAT(DISTINCT COALESCE(pl.mobile,tp.mobile) ORDER BY COALESCE(pl.mobile,tp.mobile) SEPARATOR '، ') AS participant_mobiles,
+       r.contact_mobile,
+-      t.title AS tournament_title,p.method,p.amount,p.status,
++      t.title AS tournament_title,p.method,p.amount,p.status,r.status AS registration_status,
+       p.payer_card_last4,p.tracking_code,p.paid_on,p.paid_time,p.submitted_at,
+       p.rejected_reason,p.correction_expires_at,pr.id AS receipt_id,
+       p.created_at,p.updated_at
+@@ -86,6 +87,7 @@ export async function GET() {
+       method: row.method,
+       amount: Number(row.amount),
+       status: row.status,
++      registrationStatus: row.registration_status,
+       cardLast4: row.payer_card_last4,
+       trackingCode: row.tracking_code,
+       paidOn: dateOnly(row.paid_on),
+diff --git a/src/app/api/payments/receipts/route.ts b/src/app/api/payments/receipts/route.ts
+index 416fa1033f72c12ea27cdc1bb2d6a945c1652488..6b1230baaab46a48297d5d1f31c0c9c2c40b3b5c 100644
+--- a/src/app/api/payments/receipts/route.ts
++++ b/src/app/api/payments/receipts/route.ts
+@@ -1,166 +1,276 @@
+-import { mkdir, unlink, writeFile } from "fs/promises";
+-import path from "path";
+-import { randomUUID } from "crypto";
+-import { NextResponse } from "next/server";
+-import type { RowDataPacket } from "mysql2";
+-import { getSession, hasPermission } from "@/lib/auth";
+-import { writeAuditLog } from "@/lib/audit";
+-import { db, queryRows } from "@/lib/db";
+-
+-const allowed = new Map([
+-  ["image/jpeg", "jpg"],
+-  ["image/png", "png"],
+-  ["application/pdf", "pdf"]
+-]);
+-const maxSize = 5 * 1024 * 1024;
+-
+-type PaymentRow = RowDataPacket & {
+-  id: number;
+-  public_id: string;
+-  user_id: number | null;
+-  buyer_user_id: number | null;
+-  registration_id: number;
+-  qr_token: string;
+-  status: string;
+-  old_file_path: string | null;
+-  method: string;
+-  payer_name: string | null;
+-  payer_card_last4: string | null;
+-  tracking_code: string | null;
+-  paid_on: string | Date | null;
+-  registration_status: string;
+-};
+-
+-function matchesSignature(buffer: Buffer, mime: string) {
+-  if (mime === "image/jpeg") return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+-  if (mime === "image/png") return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]));
+-  if (mime === "application/pdf") return buffer.subarray(0, 5).toString("ascii") === "%PDF-";
+-  return false;
+-}
+-
+-export async function POST(request: Request) {
+-  const user = await getSession();
+-
+-  try {
+-    const form = await request.formData();
+-    const file = form.get("file");
+-    const paymentId = String(form.get("paymentId") || "").trim();
+-    const receiptToken = String(form.get("receiptToken") || "").trim();
+-
+-    if (!(file instanceof File) || !paymentId) {
+-      return NextResponse.json({ message: "شناسه پرداخت و فایل فیش الزامی است." }, { status: 422 });
+-    }
+-
+-    const extension = allowed.get(file.type);
+-    if (!extension || file.size <= 0 || file.size > maxSize) {
+-      return NextResponse.json({ message: "فقط JPG، PNG یا PDF تا ۵ مگابایت مجاز است." }, { status: 422 });
+-    }
+-
+-    const buffer = Buffer.from(await file.arrayBuffer());
+-    if (!matchesSignature(buffer, file.type)) {
+-      return NextResponse.json({ message: "محتوای واقعی فایل با نوع اعلام‌شده مطابقت ندارد." }, { status: 422 });
+-    }
+-
+-    const payments = await queryRows<PaymentRow[]>(`
+-      SELECT p.id,p.public_id,p.user_id,p.registration_id,p.status,p.method,
+-             p.payer_name,p.payer_card_last4,p.tracking_code,p.paid_on,
+-             r.buyer_user_id,r.qr_token,r.status AS registration_status,pr.file_path AS old_file_path
+-      FROM payments p
+-      JOIN registrations r ON r.id=p.registration_id
+-      LEFT JOIN payment_receipts pr ON pr.payment_id=p.id
+-      WHERE (p.public_id=? OR p.id=?)
+-      LIMIT 1
+-    `, [paymentId, /^\d+$/.test(paymentId) ? Number(paymentId) : 0]);
+-
+-    const payment = payments[0];
+-    if (!payment) return NextResponse.json({ message: "پرداخت یافت نشد." }, { status: 404 });
+-
+-    const ownsPayment = Boolean(user && String(payment.user_id || payment.buyer_user_id || "") === user.id);
+-    const hasReceiptToken = Boolean(receiptToken && receiptToken === payment.qr_token);
+-    if (!ownsPayment && !hasReceiptToken && !hasPermission(user, "payments.approve")) {
+-      return NextResponse.json({ message: "اجازه بارگذاری فیش برای این پرداخت را ندارید." }, { status: 403 });
+-    }
+-
+-    if (["APPROVED", "REFUNDED", "CANCELLED", "REJECTED", "EXPIRED"].includes(payment.status) || ["CANCELLED","REJECTED","EXPIRED","WAITLISTED"].includes(payment.registration_status)) {
+-      return NextResponse.json({ message: "وضعیت این پرداخت اجازه بارگذاری فیش جدید را نمی‌دهد." }, { status: 409 });
+-    }
+-
+-    if (!["card_to_card", "receipt"].includes(payment.method)) {
+-      return NextResponse.json({ message: "تصویر رسید فقط برای انتقال بانکی قابل ثبت است." }, { status: 409 });
+-    }
+-
+-    const fileName = `${payment.id}-${randomUUID()}.${extension}`;
+-    const relativePath = path.posix.join("receipts", fileName);
+-    const storageDirectory = path.join(process.cwd(), "storage", "receipts");
+-    const absolutePath = path.join(storageDirectory, fileName);
+-    await mkdir(storageDirectory, { recursive: true });
+-    await writeFile(absolutePath, buffer, { flag: "wx" });
+-
+-    const connection = await db.getConnection();
+-    try {
+-      await connection.beginTransaction();
+-      const [lockedRows] = await connection.query<PaymentRow[]>(`
+-        SELECT p.id,p.public_id,p.user_id,p.registration_id,p.status,p.method,p.payer_name,p.payer_card_last4,p.tracking_code,p.paid_on,
+-               r.buyer_user_id,r.qr_token,r.status AS registration_status,pr.file_path AS old_file_path
+-        FROM payments p JOIN registrations r ON r.id=p.registration_id
+-        LEFT JOIN payment_receipts pr ON pr.payment_id=p.id
+-        WHERE p.id=? LIMIT 1 FOR UPDATE
+-      `, [payment.id]);
+-      const locked = lockedRows[0];
+-      if (!locked || ["APPROVED","REFUNDED","CANCELLED","REJECTED","EXPIRED"].includes(locked.status) || ["CANCELLED","REJECTED","EXPIRED","WAITLISTED"].includes(locked.registration_status)) {
+-        await connection.rollback();
+-        await unlink(absolutePath).catch(() => undefined);
+-        return NextResponse.json({ message: "وضعیت این ثبت‌نام اجازه بارگذاری فیش جدید را نمی‌دهد." }, { status: 409 });
+-      }
+-      await connection.execute(`
+-        INSERT INTO payment_receipts(payment_id,file_path,mime_type,file_size,uploaded_at)
+-        VALUES(?,?,?,?,NOW())
+-        ON DUPLICATE KEY UPDATE
+-          file_path=VALUES(file_path),mime_type=VALUES(mime_type),
+-          file_size=VALUES(file_size),uploaded_at=NOW()
+-      `, [payment.id, relativePath, file.type, file.size]);
+-      const hasPaymentDetails = Boolean(
+-        payment.payer_name && payment.payer_card_last4 && payment.tracking_code && payment.paid_on
+-      );
+-      await connection.execute(`
+-        UPDATE payments
+-        SET status=IF(?,'PENDING',status),
+-            rejected_reason=IF(?,NULL,rejected_reason),
+-            updated_at=NOW()
+-        WHERE id=?
+-      `, [hasPaymentDetails ? 1 : 0, hasPaymentDetails ? 1 : 0, payment.id]);
+-      if (hasPaymentDetails) {
+-        await connection.execute(`
+-          UPDATE registrations SET status='PENDING_APPROVAL',updated_at=NOW()
+-          WHERE id=? AND status IN ('PENDING_PAYMENT','PENDING_APPROVAL','NEEDS_CORRECTION','RESERVED')
+-        `, [payment.registration_id]);
+-      }
+-      await connection.commit();
+-    } catch (error) {
+-      await connection.rollback();
+-      await unlink(absolutePath).catch(() => undefined);
+-      throw error;
+-    } finally {
+-      connection.release();
+-    }
+-
+-    if (payment.old_file_path && payment.old_file_path !== relativePath) {
+-      const oldAbsolutePath = path.join(process.cwd(), "storage", payment.old_file_path);
+-      await unlink(oldAbsolutePath).catch(() => undefined);
+-    }
+-
+-    await writeAuditLog({
+-      actorUserId: user?.id || null,
+-      action: "payment.receipt_uploaded",
+-      entityType: "payment",
+-      entityId: payment.id,
+-      newData: { filePath: relativePath, mimeType: file.type, fileSize: file.size, optional: true },
+-      request
+-    });
+-
+-    return NextResponse.json({ ok: true, paymentId: payment.public_id }, { status: 201 });
+-  } catch (error) {
+-    console.error("payment.receipt.upload.failed", error);
+-    return NextResponse.json({ message: "آپلود فیش انجام نشد." }, { status: 500 });
+-  }
+-}
++import { mkdir, unlink, writeFile } from "fs/promises";
++import path from "path";
++import { randomUUID } from "crypto";
++import { NextResponse } from "next/server";
++import type { RowDataPacket } from "mysql2";
++import { getSession, hasPermission } from "@/lib/auth";
++import { writeAuditLog } from "@/lib/audit";
++import { db } from "@/lib/db";
++import { expireStaleRegistrationState } from "@/lib/registration-flow";
++
++const allowed = new Map([
++  ["image/jpeg", "jpg"],
++  ["image/png", "png"],
++  ["application/pdf", "pdf"]
++]);
++const maxSize = 5 * 1024 * 1024;
++
++type PaymentRow = RowDataPacket & {
++  id: number;
++  public_id: string;
++  user_id: number | null;
++  buyer_user_id: number | null;
++  registration_id: number;
++  qr_token: string;
++  status: string;
++  old_file_path: string | null;
++  method: string;
++  payer_name: string | null;
++  payer_card_last4: string | null;
++  tracking_code: string | null;
++  paid_on: string | Date | null;
++  submitted_at: Date | null;
++  registration_status: string;
++};
++
++function matchesSignature(buffer: Buffer, mime: string) {
++  if (mime === "image/jpeg") {
++    return buffer.length >= 3
++      && buffer[0] === 0xff
++      && buffer[1] === 0xd8
++      && buffer[2] === 0xff;
++  }
++  if (mime === "image/png") {
++    return buffer.length >= 8
++      && buffer.subarray(0, 8).equals(
++        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
++      );
++  }
++  if (mime === "application/pdf") {
++    return buffer.subarray(0, 5).toString("ascii") === "%PDF-";
++  }
++  return false;
++}
++
++function resolveStoredReceiptPath(relativePath: string) {
++  const storageRoot = path.resolve(process.cwd(), "storage");
++  const absolutePath = path.resolve(storageRoot, relativePath);
++  if (!absolutePath.startsWith(`${storageRoot}${path.sep}`)) return null;
++  return absolutePath;
++}
++
++export async function POST(request: Request) {
++  const user = await getSession();
++
++  try {
++    const form = await request.formData();
++    const file = form.get("file");
++    const paymentId = String(form.get("paymentId") || "").trim();
++    const receiptToken = String(form.get("receiptToken") || "").trim();
++
++    if (!(file instanceof File) || !paymentId) {
++      return NextResponse.json({
++        message: "شناسه پرداخت و فایل فیش الزامی است."
++      }, { status: 422 });
++    }
++
++    const extension = allowed.get(file.type);
++    if (!extension || file.size <= 0 || file.size > maxSize) {
++      return NextResponse.json({
++        message: "فقط JPG، PNG یا PDF تا ۵ مگابایت مجاز است."
++      }, { status: 422 });
++    }
++
++    const buffer = Buffer.from(await file.arrayBuffer());
++    if (!matchesSignature(buffer, file.type)) {
++      return NextResponse.json({
++        message: "محتوای واقعی فایل با نوع اعلام‌شده مطابقت ندارد."
++      }, { status: 422 });
++    }
++
++    const connection = await db.getConnection();
++    let payment: PaymentRow | null = null;
++    let relativePath = "";
++    let absolutePath = "";
++    let oldFilePath: string | null = null;
++    let submittedForReview = false;
++
++    try {
++      await connection.beginTransaction();
++      await expireStaleRegistrationState(connection);
++
++      const [lockedRows] = await connection.query<PaymentRow[]>(`
++        SELECT
++          p.id,p.public_id,p.user_id,p.registration_id,p.status,p.method,
++          p.payer_name,p.payer_card_last4,p.tracking_code,p.paid_on,p.submitted_at,
++          r.buyer_user_id,r.qr_token,r.status AS registration_status,
++          pr.file_path AS old_file_path
++        FROM payments p
++        JOIN registrations r ON r.id=p.registration_id
++        LEFT JOIN payment_receipts pr ON pr.payment_id=p.id
++        WHERE (p.public_id=? OR p.id=?)
++        LIMIT 1
++        FOR UPDATE
++      `, [paymentId, /^\d+$/.test(paymentId) ? Number(paymentId) : 0]);
++
++      payment = lockedRows[0] || null;
++      if (!payment) {
++        await connection.rollback();
++        return NextResponse.json({ message: "پرداخت یافت نشد." }, { status: 404 });
++      }
++
++      const ownsPayment = Boolean(
++        user && String(payment.user_id || payment.buyer_user_id || "") === user.id
++      );
++      const hasReceiptToken = Boolean(receiptToken && receiptToken === payment.qr_token);
++      if (!ownsPayment && !hasReceiptToken && !hasPermission(user, "payments.approve")) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "اجازه بارگذاری فیش برای این پرداخت را ندارید."
++        }, { status: 403 });
++      }
++
++      if (
++        ["APPROVED", "REFUNDED", "CANCELLED", "REJECTED", "EXPIRED"].includes(payment.status)
++        || ["CANCELLED", "REJECTED", "EXPIRED", "WAITLISTED"].includes(
++          payment.registration_status
++        )
++      ) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "وضعیت این پرداخت اجازه بارگذاری فیش جدید را نمی‌دهد."
++        }, { status: 409 });
++      }
++
++      if (!["card_to_card", "receipt"].includes(payment.method)) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "تصویر رسید فقط برای انتقال بانکی قابل ثبت است."
++        }, { status: 409 });
++      }
++
++      if (!["PENDING_PAYMENT", "PENDING_APPROVAL", "NEEDS_CORRECTION", "RESERVED"].includes(
++        payment.registration_status
++      )) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "وضعیت ثبت‌نام با بارگذاری رسید سازگار نیست. صفحه را تازه‌سازی کنید."
++        }, { status: 409 });
++      }
++
++      if (
++        payment.status === "NEEDS_CORRECTION"
++        && payment.registration_status !== "NEEDS_CORRECTION"
++      ) {
++        await connection.rollback();
++        return NextResponse.json({
++          message: "وضعیت پرداخت و ثبت‌نام هماهنگ نیست. صفحه را تازه‌سازی کنید."
++        }, { status: 409 });
++      }
++
++      const fileName = `${payment.id}-${randomUUID()}.${extension}`;
++      relativePath = path.posix.join("receipts", fileName);
++      const storageDirectory = path.join(process.cwd(), "storage", "receipts");
++      absolutePath = path.join(storageDirectory, fileName);
++      oldFilePath = payment.old_file_path;
++
++      await mkdir(storageDirectory, { recursive: true });
++      await writeFile(absolutePath, buffer, { flag: "wx" });
++
++      await connection.execute(`
++        INSERT INTO payment_receipts(payment_id,file_path,mime_type,file_size,uploaded_at)
++        VALUES(?,?,?,?,NOW())
++        ON DUPLICATE KEY UPDATE
++          file_path=VALUES(file_path),mime_type=VALUES(mime_type),
++          file_size=VALUES(file_size),uploaded_at=NOW()
++      `, [payment.id, relativePath, file.type, file.size]);
++
++      const hasPaymentDetails = Boolean(
++        payment.payer_name
++        && payment.payer_card_last4
++        && payment.tracking_code
++        && payment.paid_on
++      );
++      const shouldNotifyAdmins = hasPaymentDetails && (
++        payment.status === "NEEDS_CORRECTION" || !payment.submitted_at
++      );
++
++      if (hasPaymentDetails) {
++        await connection.execute(`
++          UPDATE payments
++          SET status='PENDING',submitted_at=NOW(),rejected_reason=NULL,
++              correction_expires_at=NULL,approved_by=NULL,approved_at=NULL,updated_at=NOW()
++          WHERE id=?
++        `, [payment.id]);
++
++        await connection.execute(`
++          UPDATE registrations
++          SET status='PENDING_APPROVAL',correction_expires_at=NULL,updated_at=NOW()
++          WHERE id=? AND status IN ('PENDING_PAYMENT','PENDING_APPROVAL','NEEDS_CORRECTION','RESERVED')
++        `, [payment.registration_id]);
++
++        submittedForReview = true;
++      }
++
++      if (shouldNotifyAdmins) {
++        await connection.execute(`
++          INSERT INTO notifications(user_id,type,title,body,data,created_at)
++          SELECT DISTINCT
++            ur.user_id,
++            'admin_payment_resubmitted',
++            'رسید پرداخت دوباره ارسال شد',
++            'کاربر رسید پرداخت را برای بررسی دوباره ارسال کرد.',
++            ?,
++            NOW()
++          FROM user_roles ur
++          JOIN role_permissions rp ON rp.role_id=ur.role_id
++          JOIN permissions perm ON perm.id=rp.permission_id
++          JOIN users au ON au.id=ur.user_id
++          WHERE perm.name IN ('payments.view','payments.approve')
++            AND au.status='ACTIVE'
++            AND au.deleted_at IS NULL
++        `, [JSON.stringify({
++          paymentId: payment.id,
++          registrationId: payment.registration_id
++        })]);
++      }
++
++      await connection.commit();
++    } catch (error) {
++      await connection.rollback();
++      if (absolutePath) await unlink(absolutePath).catch(() => undefined);
++      throw error;
++    } finally {
++      connection.release();
++    }
++
++    if (oldFilePath && oldFilePath !== relativePath) {
++      const oldAbsolutePath = resolveStoredReceiptPath(oldFilePath);
++      if (oldAbsolutePath) await unlink(oldAbsolutePath).catch(() => undefined);
++    }
++
++    await writeAuditLog({
++      actorUserId: user?.id || null,
++      action: "payment.receipt_uploaded",
++      entityType: "payment",
++      entityId: payment!.id,
++      oldData: { filePath: oldFilePath },
++      newData: {
++        filePath: relativePath,
++        mimeType: file.type,
++        fileSize: file.size,
++        submittedForReview
++      },
++      request
++    });
++
++    return NextResponse.json({
++      ok: true,
++      paymentId: payment!.public_id,
++      submittedForReview
++    }, { status: 201 });
++  } catch (error) {
++    console.error("payment.receipt.upload.failed", error);
++    return NextResponse.json({ message: "آپلود فیش انجام نشد." }, { status: 500 });
++  }
++}
+diff --git a/src/components/account/payments-list.tsx b/src/components/account/payments-list.tsx
+index a2a4ef42650d20bbdb19a78d54a1e0dcc8191a22..57d7e62c70b13f6e9e3ffb775193f64d3600a7ac 100644
+--- a/src/components/account/payments-list.tsx
++++ b/src/components/account/payments-list.tsx
+@@ -108,6 +108,15 @@ export function PaymentsList() {
+     if (!/^\d{4}$/.test(edit.cardLast4)) return setError("۴ رقم آخر کارت را صحیح وارد کنید.");
+     if (edit.trackingCode.trim().length < 4) return setError("کد پیگیری را وارد کنید.");
+     if (!edit.paidOn) return setError("تاریخ واریز را وارد کنید.");
++    if (edit.receipt) {
++      const allowedTypes = ["image/jpeg", "image/png", "application/pdf"];
++      if (!allowedTypes.includes(edit.receipt.type)) {
++        return setError("فقط فایل JPG، PNG یا PDF قابل ارسال است.");
++      }
++      if (edit.receipt.size <= 0 || edit.receipt.size > 5 * 1024 * 1024) {
++        return setError("حجم تصویر رسید باید حداکثر ۵ مگابایت باشد.");
++      }
++    }
+ 
+     setBusyId(item.id);
+     setError("");
+@@ -138,7 +147,11 @@ export function PaymentsList() {
+       const uploadPayload = await uploadResponse.json();
+       if (!uploadResponse.ok) {
+         setBusyId("");
+-        return setError(uploadPayload.message || "اطلاعات ثبت شد اما بارگذاری تصویر رسید انجام نشد.");
++        setEditingId("");
++        setSuccess("اطلاعات انتقال ثبت شد و در صف بررسی قرار گرفت.");
++        setError(uploadPayload.message || "تصویر رسید بارگذاری نشد؛ می‌توانید دوباره آن را ارسال کنید.");
++        await load();
++        return;
+       }
+     }
+ 
+@@ -158,7 +171,9 @@ export function PaymentsList() {
+         const isEditing = editingId === item.id;
+         const displayStatus = item.status === "PENDING" && ["pos", "cash"].includes(item.method)
+           ? "در انتظار پرداخت حضوری"
+-          : statusTitle[item.status] || item.status;
++          : item.status === "PENDING" && item.method === "card_to_card" && !item.submittedAt
++            ? "اطلاعات پرداخت ثبت نشده"
++            : statusTitle[item.status] || item.status;
+ 
+         return <Card key={item.id} className="p-5">
+           <div className="flex flex-wrap items-start justify-between gap-4">
+diff --git a/src/components/admin/payments-manager.tsx b/src/components/admin/payments-manager.tsx
+index 7b25ae62496351813cce73b010f193675ecdf9be..eb3d6eb3568e210d0fe2a437064309d256e84ae6 100644
+--- a/src/components/admin/payments-manager.tsx
++++ b/src/components/admin/payments-manager.tsx
+@@ -31,6 +31,7 @@ type PaymentItem = {
+   method: string;
+   amount: number;
+   status: string;
++  registrationStatus: string;
+   cardLast4: string | null;
+   trackingCode: string | null;
+   paidOn: string | null;
+@@ -61,6 +62,20 @@ const methodTitle: Record<string, string> = {
+   online: "درگاه قدیمی"
+ };
+ 
++const registrationStatusTitle: Record<string, string> = {
++  RESERVED: "رزرو موقت",
++  PENDING_PAYMENT: "در انتظار پرداخت حضوری",
++  PENDING_APPROVAL: "در انتظار بررسی پرداخت",
++  NEEDS_CORRECTION: "منتظر اصلاح کاربر",
++  CONFIRMED: "ثبت‌نام قطعی",
++  WAITLISTED: "صف انتظار",
++  CHECKED_IN: "حاضر در مسابقه",
++  NO_SHOW: "عدم حضور",
++  CANCELLED: "ثبت‌نام لغوشده",
++  REJECTED: "ثبت‌نام ردشده",
++  EXPIRED: "ثبت‌نام منقضی"
++};
++
+ const methodOptions = [
+   { value: "all", label: "همه روش‌ها" },
+   { value: "card_to_card", label: "کارت‌به‌کارت" },
+@@ -279,8 +294,18 @@ export function PaymentsManager() {
+ 
+       <div className="mt-5 grid gap-4">
+         {filtered.map((item) => {
+-          const canReview = item.status === "PENDING" || item.status === "NEEDS_CORRECTION";
+           const needsCorrection = item.status === "NEEDS_CORRECTION";
++          const isCardTransferReady = item.status === "PENDING"
++            && item.method === "card_to_card"
++            && item.registrationStatus === "PENDING_APPROVAL"
++            && Boolean(item.submittedAt)
++            && Boolean(item.payerName && item.cardLast4 && item.trackingCode && item.paidOn);
++          const isOnsiteReady = item.status === "PENDING"
++            && ["pos", "cash"].includes(item.method)
++            && item.registrationStatus === "PENDING_PAYMENT";
++          const canApprove = isCardTransferReady || isOnsiteReady;
++          const canRequestCorrection = isCardTransferReady;
++          const canReject = canApprove || needsCorrection;
+ 
+           return (
+             <Card key={item.id} className="overflow-hidden">
+@@ -316,6 +341,10 @@ export function PaymentsManager() {
+                     dir="ltr"
+                   />
+                   <Info title="روش پرداخت" value={methodTitle[item.method] || item.method} />
++                  <Info
++                    title="وضعیت ثبت‌نام"
++                    value={registrationStatusTitle[item.registrationStatus] || item.registrationStatus}
++                  />
+                 </div>
+ 
+                 <div className="grid gap-3 rounded-2xl border border-[var(--line)] p-4 sm:grid-cols-2">
+@@ -340,6 +369,18 @@ export function PaymentsManager() {
+                 </Alert>
+               )}
+ 
++              {needsCorrection && (
++                <Alert tone="info" className="mx-5 mb-4">
++                  این پرداخت منتظر ارسال اطلاعات اصلاح‌شده توسط کاربر است و فعلاً قابل تأیید نیست.
++                </Alert>
++              )}
++
++              {item.status === "PENDING" && item.method === "card_to_card" && !isCardTransferReady && (
++                <Alert tone="warning" className="mx-5 mb-4">
++                  اطلاعات انتقال بانکی هنوز کامل ارسال نشده است.
++                </Alert>
++              )}
++
+               <div className="flex flex-wrap gap-2 border-t border-[var(--line)] p-5">
+                 {item.trackingCode && (
+                   <Button
+@@ -380,40 +421,40 @@ export function PaymentsManager() {
+                     مشاهده رسید
+                   </Button>
+                 )}
+-                {canReview && (
+-                  <>
+-                    <Button
+-                      type="button"
+-                      size="sm"
+-                      loading={busyId === item.id}
+-                      onClick={() => update(item, "approve")}
+-                    >
+-                      <Check size={15} />
+-                      تأیید پرداخت
+-                    </Button>
+-                    {item.method === "card_to_card" && !needsCorrection && (
+-                      <Button
+-                        type="button"
+-                        variant="secondary"
+-                        size="sm"
+-                        disabled={busyId === item.id}
+-                        onClick={() => update(item, "request_correction")}
+-                      >
+-                        <MessageSquareWarning size={15} />
+-                        نیازمند اصلاح
+-                      </Button>
+-                    )}
+-                    <Button
+-                      type="button"
+-                      variant="dangerSoft"
+-                      size="sm"
+-                      disabled={busyId === item.id}
+-                      onClick={() => update(item, "reject")}
+-                    >
+-                      <X size={15} />
+-                      رد نهایی
+-                    </Button>
+-                  </>
++                {canApprove && (
++                  <Button
++                    type="button"
++                    size="sm"
++                    loading={busyId === item.id}
++                    onClick={() => update(item, "approve")}
++                  >
++                    <Check size={15} />
++                    {isOnsiteReady ? "تأیید پرداخت حضوری" : "تأیید پرداخت"}
++                  </Button>
++                )}
++                {canRequestCorrection && (
++                  <Button
++                    type="button"
++                    variant="secondary"
++                    size="sm"
++                    disabled={busyId === item.id}
++                    onClick={() => update(item, "request_correction")}
++                  >
++                    <MessageSquareWarning size={15} />
++                    نیازمند اصلاح
++                  </Button>
++                )}
++                {canReject && (
++                  <Button
++                    type="button"
++                    variant="dangerSoft"
++                    size="sm"
++                    disabled={busyId === item.id}
++                    onClick={() => update(item, "reject")}
++                  >
++                    <X size={15} />
++                    رد نهایی
++                  </Button>
+                 )}
+               </div>
+             </Card>

@@ -17,6 +17,7 @@ type PaymentRow = RowDataPacket & {
   method: string;
   amount: number;
   status: string;
+  registration_status: string;
   payer_card_last4: string | null;
   tracking_code: string | null;
   paid_on: string | Date | null;
@@ -52,7 +53,7 @@ export async function GET() {
       GROUP_CONCAT(DISTINCT COALESCE(pl.name,tp.name,tm.title) ORDER BY COALESCE(pl.name,tp.name,tm.title) SEPARATOR '، ') AS participant_names,
       GROUP_CONCAT(DISTINCT COALESCE(pl.mobile,tp.mobile) ORDER BY COALESCE(pl.mobile,tp.mobile) SEPARATOR '، ') AS participant_mobiles,
       r.contact_mobile,
-      t.title AS tournament_title,p.method,p.amount,p.status,
+      t.title AS tournament_title,p.method,p.amount,p.status,r.status AS registration_status,
       p.payer_card_last4,p.tracking_code,p.paid_on,p.paid_time,p.submitted_at,
       p.rejected_reason,p.correction_expires_at,pr.id AS receipt_id,
       p.created_at,p.updated_at
@@ -86,6 +87,7 @@ export async function GET() {
       method: row.method,
       amount: Number(row.amount),
       status: row.status,
+      registrationStatus: row.registration_status,
       cardLast4: row.payer_card_last4,
       trackingCode: row.tracking_code,
       paidOn: dateOnly(row.paid_on),

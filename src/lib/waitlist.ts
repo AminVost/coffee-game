@@ -33,7 +33,16 @@ export async function offerNextWaitlistEntries(connection: PoolConnection, tourn
     const [rows] = await connection.query<WaitlistRow[]>(`
       SELECT w.id,w.user_id,w.tournament_id,w.slots,t.title
       FROM waitlist_entries w JOIN tournaments t ON t.id=w.tournament_id
-      WHERE w.tournament_id=? AND w.status='WAITING' AND w.cancelled_at IS NULL AND w.user_id IS NOT NULL
+      WHERE w.tournament_id=?
+        AND w.status='WAITING'
+        AND w.cancelled_at IS NULL
+        AND w.user_id IS NOT NULL
+        AND t.deleted_at IS NULL
+        AND t.status='REGISTRATION_OPEN'
+        AND t.waitlist_mode<>'disabled'
+        AND (t.registration_starts_at IS NULL OR t.registration_starts_at<=NOW())
+        AND (t.registration_ends_at IS NULL OR t.registration_ends_at>NOW())
+        AND t.starts_at>NOW()
       ORDER BY w.position ASC,w.id ASC LIMIT 1 FOR UPDATE
     `, [tournamentId]);
     const item = rows[0];

@@ -71,7 +71,7 @@ export const SelectContent = React.forwardRef<
         position={position}
         sideOffset={sideOffset}
         className={cn(
-          "select-content relative z-[150] max-h-80 min-w-[10rem] overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-1.5 text-[var(--text)] shadow-[0_24px_80px_rgba(0,0,0,.22)]",
+          "select-content relative z-[150] max-h-80 min-w-[10rem] overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-1.5 text-[var(--text)]",
           position === "popper" && "w-[var(--radix-select-trigger-width)]",
           className
         )}

@@ -1,0 +1,1247 @@
+diff --git a/src/app/(public)/champions/page.tsx b/src/app/(public)/champions/page.tsx
+index 71c2320..46fd162 100644
+--- a/src/app/(public)/champions/page.tsx
++++ b/src/app/(public)/champions/page.tsx
+@@ -1,53 +1,40 @@
+-import { Trophy } from "lucide-react";
+-import type { RowDataPacket } from "mysql2";
++import { Medal, Trophy } from "lucide-react";
+ import { Card } from "@/components/ui/card";
+-import { queryRows } from "@/lib/db";
+-
+-type ChampionRow = RowDataPacket & {
+-  tournament_title: string;
+-  winner_name: string;
+-  completed_at: Date;
+-};
++import { listCompletedTournamentChampions } from "@/lib/tournament-completion";
+ 
+ export const dynamic = "force-dynamic";
+ 
+ export default async function Champions() {
+-  const champions = await queryRows<ChampionRow[]>(`
+-    SELECT
+-      t.title AS tournament_title,
+-      COALESCE(team.title,player.name,'برنده ثبت‌نشده') AS winner_name,
+-      m.completed_at
+-    FROM tournament_matches m
+-    JOIN tournaments t ON t.id=m.tournament_id
+-    LEFT JOIN tournament_rounds tr ON tr.id=m.round_id
+-    JOIN match_participants mp ON mp.match_id=m.id AND mp.slot=m.winner_slot
+-    LEFT JOIN teams team ON team.id=mp.team_id
+-    LEFT JOIN players player ON player.id=mp.player_id
+-    WHERE m.status='COMPLETED'
+-      AND m.winner_slot IS NOT NULL
+-      AND (tr.stage='FINAL' OR tr.title LIKE '%فینال%')
+-      AND t.deleted_at IS NULL
+-    ORDER BY m.completed_at DESC,m.id DESC
+-    LIMIT 30
+-  `);
++  const champions = await listCompletedTournamentChampions(30);
+ 
+   return (
+     <div className="page-shell">
+       <p className="section-kicker">HALL OF FAME</p>
+       <h1 className="section-title mt-2">قهرمانان Coffee Game</h1>
+-      <div className="mt-8 grid gap-5 md:grid-cols-3">
+-        {champions.map((item, index) => (
+-          <Card key={`${item.tournament_title}-${item.completed_at}-${index}`} className="p-7 text-center">
++      <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">
++        فقط مسابقه‌هایی نمایش داده می‌شوند که تمام بازی‌هایشان پایان یافته، اعتراض بازی باز ندارند و قهرمان نهایی آن‌ها مشخص است.
++      </p>
++      <div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
++        {champions.map((item) => (
++          <Card key={item.tournamentId} className="p-7 text-center">
+             <Trophy className="mx-auto text-amber-500" size={42} />
+-            <h2 className="mt-5 text-xl font-black">{item.winner_name}</h2>
+-            <p className="mt-2 text-sm text-[var(--muted)]">{item.tournament_title}</p>
+-            <time className="mt-2 block text-xs text-[var(--muted)]">
+-              {new Intl.DateTimeFormat("fa-IR", { dateStyle: "medium" }).format(new Date(item.completed_at))}
+-            </time>
++            <h2 className="mt-5 text-xl font-black">{item.champion?.name}</h2>
++            <p className="mt-2 text-sm text-[var(--muted)]">{item.title}</p>
++            <p className="mt-1 text-xs text-[var(--muted)]">{item.format}</p>
++            {item.runnerUp && (
++              <div className="mt-5 flex items-center justify-center gap-2 rounded-2xl bg-[var(--surface-2)] p-3 text-xs">
++                <Medal size={15} className="text-slate-400" />
++                نایب‌قهرمان: <strong>{item.runnerUp.name}</strong>
++              </div>
++            )}
+           </Card>
+         ))}
+       </div>
+-      {!champions.length && <Card className="mt-8 p-10 text-center text-[var(--muted)]">هنوز قهرمان نهایی ثبت نشده است.</Card>}
++      {!champions.length && (
++        <Card className="mt-8 p-10 text-center text-[var(--muted)]">
++          هنوز قهرمان نهایی بدون اعتراض باز ثبت نشده است.
++        </Card>
++      )}
+     </div>
+   );
+ }
+diff --git a/src/app/(public)/tournaments/[slug]/page.tsx b/src/app/(public)/tournaments/[slug]/page.tsx
+index c25ff72..167f063 100644
+--- a/src/app/(public)/tournaments/[slug]/page.tsx
++++ b/src/app/(public)/tournaments/[slug]/page.tsx
+@@ -19,6 +19,7 @@ import { queryRows } from "@/lib/db";
+ import { findTournament } from "@/lib/repositories/tournaments";
+ import { formatToman } from "@/lib/utils";
+ import { getRuntimeSettings } from "@/lib/runtime-settings";
++import { getTournamentCompletionSnapshot } from "@/lib/tournament-completion";
+ 
+ 
+ type TournamentMatchRow = RowDataPacket & {
+@@ -48,6 +49,10 @@ export default async function TournamentDetail({
+ 
+   if (!item) notFound();
+ 
++  const completion = item.statusCode === "COMPLETED"
++    ? await getTournamentCompletionSnapshot(Number(item.id))
++    : null;
++
+   const matches = await queryRows<TournamentMatchRow[]>(`
+     SELECT
+       m.id,m.match_number,m.status,m.scheduled_at,
+@@ -136,6 +141,17 @@ export default async function TournamentDetail({
+ 
+       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_400px]">
+         <div className="grid gap-6">
++          {completion?.champion && (
++            <Card className="border-amber-500/30 bg-amber-500/5 p-6 text-center">
++              <Trophy className="mx-auto text-amber-500" size={38} />
++              <p className="mt-3 text-xs text-[var(--muted)]">قهرمان نهایی مسابقه</p>
++              <h2 className="mt-1 text-2xl font-black">{completion.champion.name}</h2>
++              {completion.runnerUp && (
++                <p className="mt-2 text-sm text-[var(--muted)]">نایب‌قهرمان: {completion.runnerUp.name}</p>
++              )}
++            </Card>
++          )}
++
+           <Card className="p-6">
+             <h2 className="text-xl font-black">اطلاعات مسابقه</h2>
+             <div className="mt-5 grid gap-4 sm:grid-cols-2">
+diff --git a/src/app/admin/tournaments/[id]/completion/page.tsx b/src/app/admin/tournaments/[id]/completion/page.tsx
+new file mode 100644
+index 0000000..61a6daa
+--- /dev/null
++++ b/src/app/admin/tournaments/[id]/completion/page.tsx
+@@ -0,0 +1,24 @@
++import { TournamentCompletionManager } from "@/components/admin/tournament-completion-manager";
++import { requireAdminPage } from "@/lib/page-authorization";
++
++export const dynamic = "force-dynamic";
++
++export default async function TournamentCompletionPage({
++  params
++}: {
++  params: Promise<{ id: string }>;
++}) {
++  await requireAdminPage("tournaments.manage");
++  const { id } = await params;
++
++  return (
++    <div>
++      <p className="section-kicker">TOURNAMENT COMPLETION</p>
++      <h1 className="section-title mt-2">پایان مسابقه و تعیین قهرمان</h1>
++      <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--muted)]">
++        این صفحه بازی‌های باقی‌مانده، اعتراض‌های باز و نتیجه نهایی را بررسی می‌کند. مسابقه فقط وقتی پایان می‌یابد که قهرمان بدون ابهام مشخص باشد.
++      </p>
++      <TournamentCompletionManager tournamentId={id} />
++    </div>
++  );
++}
+diff --git a/src/app/api/admin/disputes/[id]/route.ts b/src/app/api/admin/disputes/[id]/route.ts
+index 82af8b9..10faf70 100644
+--- a/src/app/api/admin/disputes/[id]/route.ts
++++ b/src/app/api/admin/disputes/[id]/route.ts
+@@ -5,6 +5,7 @@ import { authorize } from "@/lib/authorization";
+ import { writeAuditLog } from "@/lib/audit";
+ import { db } from "@/lib/db";
+ import { createNotification } from "@/lib/notifications";
++import { advanceTournament, recalculateRankingsForTournament } from "@/lib/tournament-engine";
+ 
+ const schema = z.object({
+   status: z.enum(["accepted", "rejected", "resolved"]),
+@@ -14,6 +15,7 @@ const schema = z.object({
+ type DisputeRow = RowDataPacket & {
+   id: number;
+   match_id: number;
++  tournament_id: number;
+   submitted_by: number | null;
+   status: string;
+ };
+@@ -34,9 +36,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+     try {
+       await connection.beginTransaction();
+       const [rows] = await connection.query<DisputeRow[]>(`
+-        SELECT id,match_id,submitted_by,status
+-        FROM match_disputes
+-        WHERE id=?
++        SELECT dispute.id,dispute.match_id,match_row.tournament_id,dispute.submitted_by,dispute.status
++        FROM match_disputes dispute
++        JOIN tournament_matches match_row ON match_row.id=dispute.match_id
++        WHERE dispute.id=?
+         LIMIT 1
+         FOR UPDATE
+       `, [id]);
+@@ -69,6 +72,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+           connection
+         });
+       }
++      if (input.status !== "accepted") {
++        const advancement = await advanceTournament(connection, old.tournament_id);
++        if ((advancement as { completed?: boolean }).completed) {
++          await recalculateRankingsForTournament(connection, old.tournament_id);
++        }
++      }
+       await connection.commit();
+     } catch (error) {
+       await connection.rollback();
+diff --git a/src/app/api/admin/matches/[id]/route.ts b/src/app/api/admin/matches/[id]/route.ts
+index b6eb5d5..a4070bb 100644
+--- a/src/app/api/admin/matches/[id]/route.ts
++++ b/src/app/api/admin/matches/[id]/route.ts
+@@ -426,6 +426,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+           WHERE id=?
+         `, [input.homeScore, input.awayScore, resultWinner, input.reason, id]);
+         await updateWinnerFlags(connection, match.id, resultWinner);
++        await connection.execute(`
++          UPDATE match_disputes
++          SET status='resolved',
++              resolution=CONCAT(COALESCE(resolution,''),'\nنتیجه نهایی توسط مدیر اصلاح شد.'),
++              resolved_by=?,resolved_at=NOW()
++          WHERE match_id=? AND status='accepted'
++        `, [auth.user.id, match.id]);
++        advancement = await advanceTournament(connection, match.tournament_id);
+         await recalculateRankingsForTournament(connection, match.tournament_id);
+       }
+ 
+diff --git a/src/app/api/admin/tournaments/[id]/completion/route.ts b/src/app/api/admin/tournaments/[id]/completion/route.ts
+new file mode 100644
+index 0000000..c3c1c26
+--- /dev/null
++++ b/src/app/api/admin/tournaments/[id]/completion/route.ts
+@@ -0,0 +1,119 @@
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import { authorize } from "@/lib/authorization";
++import { writeAuditLog } from "@/lib/audit";
++import { db } from "@/lib/db";
++import {
++  finalizeTournament,
++  inspectTournamentCompletion
++} from "@/lib/tournament-completion";
++import {
++  advanceTournament,
++  recalculateRankingsForTournament
++} from "@/lib/tournament-engine";
++
++const actionSchema = z.object({
++  action: z.enum(["sync", "finalize"])
++});
++
++function parseTournamentId(value: string) {
++  return /^\d+$/.test(value) ? Number(value) : null;
++}
++
++export async function GET(
++  _request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  try {
++    const { id } = await params;
++    const tournamentId = parseTournamentId(id);
++    if (!tournamentId) {
++      return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++    }
++
++    const connection = await db.getConnection();
++    try {
++      const snapshot = await inspectTournamentCompletion(connection, tournamentId);
++      if (!snapshot) {
++        return NextResponse.json({ message: "مسابقه یافت نشد." }, { status: 404 });
++      }
++      return NextResponse.json(snapshot);
++    } finally {
++      connection.release();
++    }
++  } catch {
++    return NextResponse.json(
++      { message: "دریافت وضعیت پایان مسابقه انجام نشد." },
++      { status: 500 }
++    );
++  }
++}
++
++export async function POST(
++  request: Request,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  const auth = await authorize("tournaments.manage");
++  if (auth.response) return auth.response;
++
++  try {
++    const input = actionSchema.parse(await request.json());
++    const { id } = await params;
++    const tournamentId = parseTournamentId(id);
++    if (!tournamentId) {
++      return NextResponse.json({ message: "شناسه مسابقه نامعتبر است." }, { status: 400 });
++    }
++
++    const connection = await db.getConnection();
++    let snapshot = null;
++    let advancement: unknown = null;
++    try {
++      await connection.beginTransaction();
++      if (input.action === "sync") {
++        advancement = await advanceTournament(connection, tournamentId);
++        snapshot = await inspectTournamentCompletion(connection, tournamentId);
++      } else {
++        snapshot = await finalizeTournament(connection, tournamentId);
++      }
++
++      if (snapshot?.completed) {
++        await recalculateRankingsForTournament(connection, tournamentId);
++      }
++      await connection.commit();
++    } catch (error) {
++      await connection.rollback();
++      throw error;
++    } finally {
++      connection.release();
++    }
++
++    await writeAuditLog({
++      actorUserId: auth.user.id,
++      action: `tournament.completion_${input.action}`,
++      entityType: "tournament",
++      entityId: String(tournamentId),
++      newData: { action: input.action, advancement },
++      request
++    });
++
++    return NextResponse.json({ ok: true, advancement, snapshot });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({ message: "عملیات نامعتبر است." }, { status: 422 });
++    }
++    const code = error instanceof Error ? error.message : "";
++    const messages: Record<string, string> = {
++      TOURNAMENT_NOT_FOUND: "مسابقه یافت نشد.",
++      TOURNAMENT_NOT_READY_TO_COMPLETE: "مسابقه هنوز شرایط پایان نهایی را ندارد.",
++      AGGREGATE_TIE: "مجموع نتیجه مرحله رفت‌وبرگشت مساوی است و برنده مشخص نشده است.",
++      DOUBLE_ELIMINATION_STATE_INVALID: "وضعیت براکت دوحذفی قابل ادامه نیست و باید بررسی شود."
++    };
++    return NextResponse.json(
++      { message: messages[code] || "عملیات پایان مسابقه انجام نشد." },
++      { status: messages[code] ? 409 : 500 }
++    );
++  }
++}
+diff --git a/src/components/admin/tournament-completion-manager.tsx b/src/components/admin/tournament-completion-manager.tsx
+new file mode 100644
+index 0000000..6ccbffc
+--- /dev/null
++++ b/src/components/admin/tournament-completion-manager.tsx
+@@ -0,0 +1,269 @@
++"use client";
++
++import { useCallback, useEffect, useState } from "react";
++import {
++  AlertTriangle,
++  CheckCircle2,
++  Crown,
++  Medal,
++  RefreshCw,
++  Trophy
++} from "lucide-react";
++import { Alert } from "@/components/ui/alert";
++import { Button } from "@/components/ui/button";
++import { Card } from "@/components/ui/card";
++import { getTournamentStatusLabel } from "@/lib/tournament-definition";
++
++type Participant = {
++  key: string;
++  name: string;
++  seed: number | null;
++};
++
++type Standing = {
++  rank: number;
++  participant: Participant;
++  played: number;
++  wins: number;
++  draws: number;
++  losses: number;
++  scored: number;
++  conceded: number;
++  points: number;
++};
++
++type Snapshot = {
++  tournamentId: number;
++  title: string;
++  status: string;
++  format: string;
++  totalMatches: number;
++  completedMatches: number;
++  remainingMatches: number;
++  openDisputes: number;
++  progressPercent: number;
++  champion: Participant | null;
++  runnerUp: Participant | null;
++  thirdPlace: Participant | null;
++  standings: Standing[];
++  blockers: string[];
++  warnings: string[];
++  readyToFinalize: boolean;
++  completed: boolean;
++};
++
++async function readPayload(response: Response) {
++  const text = await response.text();
++  if (!text) return {} as Record<string, unknown>;
++  try {
++    return JSON.parse(text) as Record<string, unknown>;
++  } catch {
++    return {} as Record<string, unknown>;
++  }
++}
++
++function ResultCard({
++  title,
++  participant,
++  icon
++}: {
++  title: string;
++  participant: Participant | null;
++  icon: React.ReactNode;
++}) {
++  return (
++    <Card className="p-5 text-center">
++      <div className="mx-auto grid size-11 place-items-center rounded-2xl bg-amber-500/10 text-amber-500">
++        {icon}
++      </div>
++      <p className="mt-3 text-xs text-[var(--muted)]">{title}</p>
++      <strong className="mt-1 block text-lg">{participant?.name || "هنوز مشخص نشده"}</strong>
++      {participant?.seed && (
++        <span className="mt-2 inline-block rounded-full bg-[var(--surface-2)] px-3 py-1 text-xs text-[var(--muted)]">
++          Seed {participant.seed.toLocaleString("fa-IR")}
++        </span>
++      )}
++    </Card>
++  );
++}
++
++export function TournamentCompletionManager({ tournamentId }: { tournamentId: string }) {
++  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [busy, setBusy] = useState<"sync" | "finalize" | null>(null);
++  const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++
++  const load = useCallback(async () => {
++    setLoading(true);
++    setError("");
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/completion`, {
++      cache: "no-store"
++    });
++    const payload = await readPayload(response);
++    setLoading(false);
++    if (!response.ok) {
++      setError(String(payload.message || "دریافت وضعیت مسابقه انجام نشد."));
++      return;
++    }
++    setSnapshot(payload as unknown as Snapshot);
++  }, [tournamentId]);
++
++  useEffect(() => {
++    void load();
++  }, [load]);
++
++  async function run(action: "sync" | "finalize") {
++    setBusy(action);
++    setError("");
++    setMessage("");
++    const response = await fetch(`/api/admin/tournaments/${tournamentId}/completion`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ action })
++    });
++    const payload = await readPayload(response);
++    setBusy(null);
++    if (!response.ok) {
++      setError(String(payload.message || "عملیات انجام نشد."));
++      return;
++    }
++    setMessage(action === "sync"
++      ? "وضعیت مرحله بعد و پایان مسابقه دوباره بررسی شد."
++      : "مسابقه با موفقیت پایان یافت و قهرمان ثبت شد.");
++    await load();
++  }
++
++  if (loading && !snapshot) {
++    return <Card className="mt-7 p-10 text-center text-[var(--muted)]">در حال بررسی وضعیت مسابقه...</Card>;
++  }
++
++  return (
++    <div className="mt-7 grid gap-6">
++      {error && <Alert tone="error">{error}</Alert>}
++      {message && <Alert tone="success">{message}</Alert>}
++
++      {snapshot && (
++        <>
++          <Card className="p-6">
++            <div className="flex flex-wrap items-start justify-between gap-4">
++              <div>
++                <p className="text-xs text-[var(--muted)]">{snapshot.format}</p>
++                <h2 className="mt-1 text-2xl font-black">{snapshot.title}</h2>
++                <p className="mt-2 text-sm text-[var(--muted)]">
++                  وضعیت فعلی: {getTournamentStatusLabel(snapshot.status)}
++                </p>
++              </div>
++              <div className="flex flex-wrap gap-2">
++                {!snapshot.completed && (
++                  <Button
++                    type="button"
++                    variant="secondary"
++                    loading={busy === "sync"}
++                    onClick={() => void run("sync")}
++                  >
++                    <RefreshCw size={16} /> بررسی و ادامه خودکار
++                  </Button>
++                )}
++                {snapshot.readyToFinalize && (
++                  <Button
++                    type="button"
++                    loading={busy === "finalize"}
++                    onClick={() => void run("finalize")}
++                  >
++                    <CheckCircle2 size={16} /> پایان نهایی مسابقه
++                  </Button>
++                )}
++              </div>
++            </div>
++
++            <div className="mt-6 h-3 overflow-hidden rounded-full bg-[var(--surface-2)]">
++              <div
++                className="h-full rounded-full bg-[var(--brand)] transition-[width]"
++                style={{ width: `${snapshot.progressPercent}%` }}
++              />
++            </div>
++            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-[var(--muted)]">
++              <span>
++                {snapshot.completedMatches.toLocaleString("fa-IR")} از {snapshot.totalMatches.toLocaleString("fa-IR")} بازی پایان یافته
++              </span>
++              <span>{snapshot.progressPercent.toLocaleString("fa-IR")}%</span>
++            </div>
++          </Card>
++
++          {snapshot.completed && snapshot.champion && (
++            <Alert tone="success">
++              <span className="inline-flex items-center gap-2 font-black">
++                <Crown size={18} /> قهرمان نهایی: {snapshot.champion.name}
++              </span>
++            </Alert>
++          )}
++
++          {!!snapshot.blockers.length && (
++            <Alert tone="warning">
++              <div className="flex items-start gap-3">
++                <AlertTriangle className="mt-0.5 shrink-0" size={18} />
++                <div>
++                  <strong>مواردی که مانع پایان مسابقه هستند:</strong>
++                  <ul className="mt-2 grid gap-1 text-sm">
++                    {snapshot.blockers.map((item) => <li key={item}>• {item}</li>)}
++                  </ul>
++                </div>
++              </div>
++            </Alert>
++          )}
++
++          {!!snapshot.warnings.length && (
++            <Alert tone="info">
++              {snapshot.warnings.map((item) => <p key={item}>{item}</p>)}
++            </Alert>
++          )}
++
++          <div className="grid gap-4 md:grid-cols-3">
++            <ResultCard title="قهرمان" participant={snapshot.champion} icon={<Trophy size={22} />} />
++            <ResultCard title="نایب‌قهرمان" participant={snapshot.runnerUp} icon={<Medal size={22} />} />
++            <ResultCard title="مقام سوم" participant={snapshot.thirdPlace} icon={<Medal size={22} />} />
++          </div>
++
++          {!!snapshot.standings.length && (
++            <Card className="overflow-hidden">
++              <div className="border-b border-[var(--line)] p-5">
++                <h3 className="font-black">جدول نهایی</h3>
++              </div>
++              <div className="overflow-x-auto">
++                <table className="w-full min-w-[720px] text-right text-sm">
++                  <thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]">
++                    <tr>
++                      <th className="p-4">رتبه</th>
++                      <th className="p-4">شرکت‌کننده</th>
++                      <th className="p-4">بازی</th>
++                      <th className="p-4">برد</th>
++                      <th className="p-4">مساوی</th>
++                      <th className="p-4">باخت</th>
++                      <th className="p-4">تفاضل</th>
++                      <th className="p-4">امتیاز</th>
++                    </tr>
++                  </thead>
++                  <tbody>
++                    {snapshot.standings.map((item) => (
++                      <tr key={item.participant.key} className="border-t border-[var(--line)]">
++                        <td className="p-4 font-black">{item.rank.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{item.participant.name}</td>
++                        <td className="p-4">{item.played.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{item.wins.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{item.draws.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{item.losses.toLocaleString("fa-IR")}</td>
++                        <td className="p-4">{(item.scored - item.conceded).toLocaleString("fa-IR")}</td>
++                        <td className="p-4 font-black">{item.points.toLocaleString("fa-IR")}</td>
++                      </tr>
++                    ))}
++                  </tbody>
++                </table>
++              </div>
++            </Card>
++          )}
++        </>
++      )}
++    </div>
++  );
++}
+diff --git a/src/components/admin/tournaments-manager.tsx b/src/components/admin/tournaments-manager.tsx
+index 1127076..d3fa9ec 100644
+--- a/src/components/admin/tournaments-manager.tsx
++++ b/src/components/admin/tournaments-manager.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ 
+ import { useState } from "react";
+-import { BarChart3, CalendarClock, Edit3, ExternalLink, ListChecks, Shuffle, Trash2 } from "lucide-react";
++import { BarChart3, CalendarClock, Edit3, ExternalLink, ListChecks, Shuffle, Trash2, Trophy } from "lucide-react";
+ import { Alert } from "@/components/ui/alert";
+ import { Button } from "@/components/ui/button";
+ import { Card } from "@/components/ui/card";
+@@ -43,6 +43,6 @@ export function TournamentsManager({ initialItems, permissions }: { initialItems
+   return <>
+     {error && <Alert tone="error" className="mt-4">{error}</Alert>}
+     {message && <Alert tone="success" className="mt-4">{message}</Alert>}
+-    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/participants`} variant="secondary" size="sm" aria-label="نهایی‌سازی شرکت‌کنندگان"><ListChecks size={15} />شرکت‌کنندگان</Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button href={`/admin/tournaments/${item.id}/schedule`} variant="secondary" size="sm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} />زمان‌بندی</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runRanking(item)} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
++    <Card className="mt-7 overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-right text-sm"><thead className="bg-[var(--surface-2)] text-xs text-[var(--muted)]"><tr><th className="p-4">مسابقه</th><th className="p-4">وضعیت</th><th className="p-4">ثبت‌نام</th><th className="p-4">تاریخ</th><th className="p-4">هزینه</th><th className="p-4">عملیات</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-[var(--line)]"><td className="p-4"><strong>{item.title}</strong><span className="mt-1 block text-xs text-[var(--muted)]">{item.gameTitle} · {item.format}</span></td><td className="p-4"><span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-500">{getTournamentStatusLabel(item.status)}</span></td><td className="p-4">{item.registered.toLocaleString("fa-IR")} / {item.capacity.toLocaleString("fa-IR")}</td><td className="p-4 text-[var(--muted)]">{item.date}</td><td className="p-4">{formatToman(item.price)}</td><td className="p-4"><div className="flex flex-wrap gap-2"><Button href={`/tournaments/${item.slug}`} target="_blank" rel="noreferrer" variant="secondary" size="iconSm" aria-label="مشاهده مسابقه"><ExternalLink size={15} /></Button>{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/edit`} variant="secondary" size="iconSm" aria-label="ویرایش کامل"><Edit3 size={15} /></Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/participants`} variant="secondary" size="sm" aria-label="نهایی‌سازی شرکت‌کنندگان"><ListChecks size={15} />شرکت‌کنندگان</Button>}{permissions.canDraw && <Button href={`/admin/tournaments/${item.id}/draw`} variant="secondary" size="sm" aria-label="مدیریت قرعه و Seed"><Shuffle size={15} />قرعه</Button>}{permissions.canSchedule && <Button href={`/admin/tournaments/${item.id}/schedule`} variant="secondary" size="sm" aria-label="زمان‌بندی بازی‌ها"><CalendarClock size={15} />زمان‌بندی</Button>}{permissions.canManage && <Button href={`/admin/tournaments/${item.id}/completion`} variant="secondary" size="sm" aria-label="پایان مسابقه و تعیین قهرمان"><Trophy size={15} />پایان مسابقه</Button>}{permissions.canSchedule && <Button type="button" disabled={busyId === `ranking:${item.id}`} onClick={() => runRanking(item)} variant="secondary" size="iconSm" aria-label="محاسبه رنکینگ"><BarChart3 size={15} /></Button>}{permissions.canManage && <Button type="button" disabled={busyId === item.id} onClick={() => remove(item)} variant="dangerSoft" size="iconSm" aria-label="حذف"><Trash2 size={15} /></Button>}</div></td></tr>)}</tbody></table></div></Card>
+   </>;
+ }
+diff --git a/src/lib/tournament-completion.ts b/src/lib/tournament-completion.ts
+new file mode 100644
+index 0000000..76e269f
+--- /dev/null
++++ b/src/lib/tournament-completion.ts
+@@ -0,0 +1,512 @@
++import type { RowDataPacket } from "mysql2";
++import type { PoolConnection } from "mysql2/promise";
++import { db } from "@/lib/db";
++
++export type CompletionParticipant = {
++  key: string;
++  playerId: number | null;
++  teamId: number | null;
++  name: string;
++  seed: number | null;
++};
++
++export type CompletionStanding = {
++  rank: number;
++  participant: CompletionParticipant;
++  played: number;
++  wins: number;
++  draws: number;
++  losses: number;
++  scored: number;
++  conceded: number;
++  points: number;
++};
++
++export type TournamentCompletionSnapshot = {
++  tournamentId: number;
++  title: string;
++  status: string;
++  format: string;
++  category: "knockout" | "league" | "group" | "swiss" | "double";
++  totalMatches: number;
++  completedMatches: number;
++  remainingMatches: number;
++  openDisputes: number;
++  unresolvedCancelledMatches: number;
++  progressPercent: number;
++  champion: CompletionParticipant | null;
++  runnerUp: CompletionParticipant | null;
++  thirdPlace: CompletionParticipant | null;
++  standings: CompletionStanding[];
++  blockers: string[];
++  warnings: string[];
++  readyToFinalize: boolean;
++  completed: boolean;
++};
++
++type TournamentRow = RowDataPacket & {
++  id: number;
++  title: string;
++  status: string;
++  format: string;
++  scoring_settings: unknown;
++};
++
++type MatchSummaryRow = RowDataPacket & {
++  total_matches: number;
++  completed_matches: number;
++  remaining_matches: number;
++  unresolved_cancelled: number;
++};
++
++type MatchParticipantRow = RowDataPacket & {
++  match_id: number;
++  pair_key: string | null;
++  status: string;
++  home_score: number | null;
++  away_score: number | null;
++  winner_slot: number | null;
++  slot: number;
++  player_id: number | null;
++  team_id: number | null;
++  seed: number | null;
++  participant_name: string | null;
++};
++
++type StandingMatchRow = RowDataPacket & {
++  match_id: number;
++  home_score: number;
++  away_score: number;
++  home_player_id: number | null;
++  home_team_id: number | null;
++  home_seed: number | null;
++  home_name: string | null;
++  away_player_id: number | null;
++  away_team_id: number | null;
++  away_seed: number | null;
++  away_name: string | null;
++};
++
++function parseObject(value: unknown): Record<string, unknown> {
++  try {
++    const parsed = typeof value === "string" ? JSON.parse(value) : value;
++    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
++      ? parsed as Record<string, unknown>
++      : {};
++  } catch {
++    return {};
++  }
++}
++
++function safeNumber(value: unknown, fallback: number) {
++  const numeric = Number(value);
++  return Number.isFinite(numeric) ? numeric : fallback;
++}
++
++function categoryOf(format: string): TournamentCompletionSnapshot["category"] {
++  const normalized = format.toLowerCase();
++  if (normalized.includes("گروه") || normalized.includes("group")) return "group";
++  if (normalized.includes("سوئیس") || normalized.includes("swiss")) return "swiss";
++  if (normalized.includes("دوحذفی") || normalized.includes("double elimination")) return "double";
++  if (normalized.includes("لیگ") || normalized.includes("round robin")) return "league";
++  return "knockout";
++}
++
++function participantKey(playerId: number | null, teamId: number | null) {
++  return playerId ? `p:${playerId}` : `t:${teamId}`;
++}
++
++function participantFromRow(row: {
++  player_id: number | null;
++  team_id: number | null;
++  seed: number | null;
++  participant_name: string | null;
++}): CompletionParticipant {
++  const playerId = row.player_id ? Number(row.player_id) : null;
++  const teamId = row.team_id ? Number(row.team_id) : null;
++  return {
++    key: participantKey(playerId, teamId),
++    playerId,
++    teamId,
++    name: row.participant_name || "شرکت‌کننده نامشخص",
++    seed: row.seed === null ? null : Number(row.seed)
++  };
++}
++
++function participantFromStanding(
++  playerId: number | null,
++  teamId: number | null,
++  seed: number | null,
++  name: string | null
++): CompletionParticipant | null {
++  if (!playerId && !teamId) return null;
++  return {
++    key: participantKey(playerId, teamId),
++    playerId: playerId ? Number(playerId) : null,
++    teamId: teamId ? Number(teamId) : null,
++    seed: seed === null ? null : Number(seed),
++    name: name || "شرکت‌کننده نامشخص"
++  };
++}
++
++async function loadRoundResult(
++  connection: PoolConnection,
++  tournamentId: number,
++  stages: string[]
++) {
++  const placeholders = stages.map(() => "?").join(",");
++  const [roundRows] = await connection.query<Array<RowDataPacket & { id: number }>>(`
++    SELECT round_row.id
++    FROM tournament_rounds round_row
++    WHERE round_row.tournament_id=? AND round_row.stage IN (${placeholders})
++    ORDER BY round_row.round_number DESC,
++      FIELD(round_row.stage,'double_reset','double_final','knockout','third_place') ASC,
++      round_row.id DESC
++    LIMIT 1
++  `, [tournamentId, ...stages]);
++  const roundId = Number(roundRows[0]?.id || 0);
++  if (!roundId) return { winner: null, loser: null, tied: false, pairCount: 0 };
++
++  const [rows] = await connection.query<MatchParticipantRow[]>(`
++    SELECT
++      match_row.id AS match_id,match_row.pair_key,match_row.status,
++      match_row.home_score,match_row.away_score,match_row.winner_slot,
++      participant.slot,participant.player_id,participant.team_id,participant.seed,
++      COALESCE(team.title,player.name) AS participant_name
++    FROM tournament_matches match_row
++    JOIN match_participants participant ON participant.match_id=match_row.id
++    LEFT JOIN teams team ON team.id=participant.team_id
++    LEFT JOIN players player ON player.id=participant.player_id
++    WHERE match_row.round_id=? AND match_row.status='COMPLETED'
++    ORDER BY match_row.match_number,participant.slot
++  `, [roundId]);
++
++  const pairs = new Map<string, Map<string, { participant: CompletionParticipant; score: number }>>();
++  for (const row of rows) {
++    const pairKey = row.pair_key || `match:${row.match_id}`;
++    const participants = pairs.get(pairKey) || new Map<string, { participant: CompletionParticipant; score: number }>();
++    const participant = participantFromRow(row);
++    const scored = Number(row.slot) === 1 ? Number(row.home_score || 0) : Number(row.away_score || 0);
++    const current = participants.get(participant.key) || { participant, score: 0 };
++    current.score += scored;
++    participants.set(participant.key, current);
++    pairs.set(pairKey, participants);
++  }
++
++  if (pairs.size !== 1) {
++    return { winner: null, loser: null, tied: false, pairCount: pairs.size };
++  }
++  const entries = [...pairs.values()][0]
++    ? [...[...pairs.values()][0].values()].sort((left, right) => right.score - left.score)
++    : [];
++  if (entries.length === 1) {
++    return { winner: entries[0].participant, loser: null, tied: false, pairCount: 1 };
++  }
++  if (entries.length < 2) return { winner: null, loser: null, tied: false, pairCount: 1 };
++  if (entries[0].score === entries[1].score) {
++    return { winner: null, loser: null, tied: true, pairCount: 1 };
++  }
++  return {
++    winner: entries[0].participant,
++    loser: entries[1].participant,
++    tied: false,
++    pairCount: 1
++  };
++}
++
++async function loadStandings(
++  connection: PoolConnection,
++  tournamentId: number,
++  stage: "league" | "swiss",
++  scoringSettings: unknown
++) {
++  const [rows] = await connection.query<StandingMatchRow[]>(`
++    SELECT
++      match_row.id AS match_id,match_row.home_score,match_row.away_score,
++      home.player_id AS home_player_id,home.team_id AS home_team_id,home.seed AS home_seed,
++      COALESCE(home_team.title,home_player.name) AS home_name,
++      away.player_id AS away_player_id,away.team_id AS away_team_id,away.seed AS away_seed,
++      COALESCE(away_team.title,away_player.name) AS away_name
++    FROM tournament_matches match_row
++    JOIN tournament_rounds round_row ON round_row.id=match_row.round_id AND round_row.stage=?
++    LEFT JOIN match_participants home ON home.match_id=match_row.id AND home.slot=1
++    LEFT JOIN teams home_team ON home_team.id=home.team_id
++    LEFT JOIN players home_player ON home_player.id=home.player_id
++    LEFT JOIN match_participants away ON away.match_id=match_row.id AND away.slot=2
++    LEFT JOIN teams away_team ON away_team.id=away.team_id
++    LEFT JOIN players away_player ON away_player.id=away.player_id
++    WHERE match_row.tournament_id=?
++      AND match_row.status='COMPLETED'
++      AND match_row.home_score IS NOT NULL
++      AND match_row.away_score IS NOT NULL
++    ORDER BY match_row.match_number
++  `, [stage, tournamentId]);
++
++  const scoring = parseObject(scoringSettings);
++  const winPoints = safeNumber(scoring.win, 3);
++  const drawPoints = safeNumber(scoring.draw, 1);
++  const lossPoints = safeNumber(scoring.loss, 0);
++  const table = new Map<string, Omit<CompletionStanding, "rank">>();
++
++  function apply(participant: CompletionParticipant | null, scored: number, conceded: number) {
++    if (!participant) return;
++    const current = table.get(participant.key) || {
++      participant,
++      played: 0,
++      wins: 0,
++      draws: 0,
++      losses: 0,
++      scored: 0,
++      conceded: 0,
++      points: 0
++    };
++    current.played += 1;
++    current.scored += scored;
++    current.conceded += conceded;
++    if (scored > conceded) {
++      current.wins += 1;
++      current.points += winPoints;
++    } else if (scored === conceded) {
++      current.draws += 1;
++      current.points += drawPoints;
++    } else {
++      current.losses += 1;
++      current.points += lossPoints;
++    }
++    table.set(participant.key, current);
++  }
++
++  for (const row of rows) {
++    const home = participantFromStanding(
++      row.home_player_id,
++      row.home_team_id,
++      row.home_seed,
++      row.home_name
++    );
++    const away = participantFromStanding(
++      row.away_player_id,
++      row.away_team_id,
++      row.away_seed,
++      row.away_name
++    );
++    apply(home, Number(row.home_score), Number(row.away_score));
++    apply(away, Number(row.away_score), Number(row.home_score));
++  }
++
++  return [...table.values()]
++    .sort((left, right) => (
++      right.points - left.points
++      || (right.scored - right.conceded) - (left.scored - left.conceded)
++      || right.scored - left.scored
++      || right.wins - left.wins
++      || (left.participant.seed ?? Number.MAX_SAFE_INTEGER)
++        - (right.participant.seed ?? Number.MAX_SAFE_INTEGER)
++      || left.participant.key.localeCompare(right.participant.key)
++    ))
++    .map((item, index): CompletionStanding => ({ ...item, rank: index + 1 }));
++}
++
++async function loadDoubleResult(connection: PoolConnection, tournamentId: number) {
++  const [participants] = await connection.query<Array<RowDataPacket & {
++    player_id: number | null;
++    team_id: number | null;
++    seed: number | null;
++    participant_name: string | null;
++    losses: number;
++  }>>(`
++    SELECT
++      entry.player_id,entry.team_id,entry.seed,
++      COALESCE(team.title,player.name) AS participant_name,
++      COALESCE(losses.losses,0) AS losses
++    FROM registration_entries entry
++    JOIN registrations registration ON registration.id=entry.registration_id
++      AND registration.tournament_id=?
++      AND registration.status IN ('CONFIRMED','CHECKED_IN')
++      AND registration.deleted_at IS NULL
++    LEFT JOIN teams team ON team.id=entry.team_id
++    LEFT JOIN players player ON player.id=entry.player_id
++    LEFT JOIN (
++      SELECT loser.player_id,loser.team_id,COUNT(*) AS losses
++      FROM tournament_matches match_row
++      JOIN match_participants loser
++        ON loser.match_id=match_row.id AND loser.slot<>match_row.winner_slot
++      WHERE match_row.tournament_id=?
++        AND match_row.status='COMPLETED'
++        AND match_row.winner_slot IS NOT NULL
++      GROUP BY loser.player_id,loser.team_id
++    ) losses ON losses.player_id<=>entry.player_id AND losses.team_id<=>entry.team_id
++    ORDER BY COALESCE(entry.seed,999999),entry.id
++  `, [tournamentId, tournamentId]);
++
++  const active = participants.filter((row) => Number(row.losses) < 2);
++  const champion = active.length === 1 ? participantFromRow(active[0]) : null;
++  const final = await loadRoundResult(connection, tournamentId, ["double_reset", "double_final"]);
++  return {
++    champion,
++    runnerUp: champion ? final.loser : null,
++    tied: false,
++    pairCount: final.pairCount
++  };
++}
++
++export async function inspectTournamentCompletion(
++  connection: PoolConnection,
++  tournamentId: number
++): Promise<TournamentCompletionSnapshot | null> {
++  const [tournamentRows] = await connection.query<TournamentRow[]>(`
++    SELECT id,title,status,format,scoring_settings
++    FROM tournaments
++    WHERE id=? AND deleted_at IS NULL
++    LIMIT 1
++  `, [tournamentId]);
++  const tournament = tournamentRows[0];
++  if (!tournament) return null;
++
++  const [summaryRows] = await connection.query<MatchSummaryRow[]>(`
++    SELECT
++      COUNT(*) AS total_matches,
++      COALESCE(SUM(status='COMPLETED'),0) AS completed_matches,
++      COALESCE(SUM(status NOT IN ('COMPLETED','CANCELLED')),0) AS remaining_matches,
++      COALESCE(SUM(status='CANCELLED' AND winner_slot IS NULL),0) AS unresolved_cancelled
++    FROM tournament_matches
++    WHERE tournament_id=?
++  `, [tournamentId]);
++  const summary = summaryRows[0];
++  const totalMatches = Number(summary?.total_matches || 0);
++  const completedMatches = Number(summary?.completed_matches || 0);
++  const remainingMatches = Number(summary?.remaining_matches || 0);
++  const unresolvedCancelledMatches = Number(summary?.unresolved_cancelled || 0);
++
++  const [disputeRows] = await connection.query<Array<RowDataPacket & { count: number }>>(`
++    SELECT COUNT(*) AS count
++    FROM match_disputes dispute
++    JOIN tournament_matches match_row ON match_row.id=dispute.match_id
++    WHERE match_row.tournament_id=? AND dispute.status IN ('open','accepted')
++  `, [tournamentId]);
++  const openDisputes = Number(disputeRows[0]?.count || 0);
++  const category = categoryOf(tournament.format);
++
++  let champion: CompletionParticipant | null = null;
++  let runnerUp: CompletionParticipant | null = null;
++  let thirdPlace: CompletionParticipant | null = null;
++  let standings: CompletionStanding[] = [];
++  let tiedFinal = false;
++
++  if (category === "league" || category === "swiss") {
++    standings = await loadStandings(connection, tournamentId, category, tournament.scoring_settings);
++    champion = standings[0]?.participant || null;
++    runnerUp = standings[1]?.participant || null;
++    thirdPlace = standings[2]?.participant || null;
++  } else if (category === "double") {
++    const result = await loadDoubleResult(connection, tournamentId);
++    champion = result.champion;
++    runnerUp = result.runnerUp;
++  } else {
++    const final = await loadRoundResult(connection, tournamentId, ["knockout"]);
++    champion = final.winner;
++    runnerUp = final.loser;
++    tiedFinal = final.tied;
++    const third = await loadRoundResult(connection, tournamentId, ["third_place"]);
++    thirdPlace = third.winner;
++  }
++
++  const blockers: string[] = [];
++  const warnings: string[] = [];
++  if (tournament.status === "CANCELLED") blockers.push("مسابقه لغو شده است.");
++  if (!["DRAW_READY", "RUNNING", "COMPLETED"].includes(tournament.status)) {
++    blockers.push("وضعیت مسابقه هنوز برای پایان نهایی مناسب نیست.");
++  }
++  if (!totalMatches) blockers.push("هنوز بازی‌ای برای این مسابقه ساخته نشده است.");
++  if (remainingMatches) blockers.push(`${remainingMatches.toLocaleString("fa-IR")} بازی هنوز پایان نیافته است.`);
++  if (unresolvedCancelledMatches) blockers.push("حداقل یک بازی لغوشده بدون نتیجه تعیین‌کننده وجود دارد.");
++  if (openDisputes) blockers.push(`${openDisputes.toLocaleString("fa-IR")} اعتراض باز باید تعیین تکلیف شود.`);
++  if (tiedFinal) blockers.push("نتیجه مجموع فینال مساوی است و قهرمان مشخص نشده است.");
++  if (!champion) blockers.push("قهرمان نهایی هنوز قابل تشخیص نیست.");
++
++  if (standings.length >= 2) {
++    const first = standings[0];
++    const second = standings[1];
++    const sameCompetitiveScore = first.points === second.points
++      && first.scored - first.conceded === second.scored - second.conceded
++      && first.scored === second.scored
++      && first.wins === second.wins;
++    if (sameCompetitiveScore) {
++      warnings.push("رتبه اول با معیار Seed یا ترتیب پایدار سیستم از رتبه دوم جدا شده است.");
++    }
++  }
++
++  const completed = tournament.status === "COMPLETED";
++  const readyToFinalize = !completed && blockers.length === 0;
++  return {
++    tournamentId: Number(tournament.id),
++    title: tournament.title,
++    status: tournament.status,
++    format: tournament.format,
++    category,
++    totalMatches,
++    completedMatches,
++    remainingMatches,
++    openDisputes,
++    unresolvedCancelledMatches,
++    progressPercent: totalMatches ? Math.round((completedMatches / totalMatches) * 100) : 0,
++    champion,
++    runnerUp,
++    thirdPlace,
++    standings,
++    blockers,
++    warnings,
++    readyToFinalize,
++    completed
++  };
++}
++
++export async function getTournamentCompletionSnapshot(tournamentId: number) {
++  const connection = await db.getConnection();
++  try {
++    return await inspectTournamentCompletion(connection, tournamentId);
++  } finally {
++    connection.release();
++  }
++}
++
++export async function finalizeTournament(
++  connection: PoolConnection,
++  tournamentId: number
++) {
++  const [locked] = await connection.query<RowDataPacket[]>(`
++    SELECT id FROM tournaments WHERE id=? AND deleted_at IS NULL LIMIT 1 FOR UPDATE
++  `, [tournamentId]);
++  if (!locked[0]) throw new Error("TOURNAMENT_NOT_FOUND");
++
++  const snapshot = await inspectTournamentCompletion(connection, tournamentId);
++  if (!snapshot) throw new Error("TOURNAMENT_NOT_FOUND");
++  if (snapshot.completed) return snapshot;
++  if (!snapshot.readyToFinalize) throw new Error("TOURNAMENT_NOT_READY_TO_COMPLETE");
++
++  await connection.execute(`
++    UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?
++  `, [tournamentId]);
++  return { ...snapshot, status: "COMPLETED", completed: true, readyToFinalize: false };
++}
++
++export async function listCompletedTournamentChampions(limit = 30) {
++  const safeLimit = Math.max(1, Math.min(50, Math.round(limit)));
++  const connection = await db.getConnection();
++  try {
++    const [rows] = await connection.query<Array<RowDataPacket & { id: number }>>(`
++      SELECT id
++      FROM tournaments
++      WHERE status='COMPLETED' AND deleted_at IS NULL
++      ORDER BY updated_at DESC,id DESC
++      LIMIT ${safeLimit}
++    `);
++    const snapshots: TournamentCompletionSnapshot[] = [];
++    for (const row of rows) {
++      const snapshot = await inspectTournamentCompletion(connection, Number(row.id));
++      if (snapshot?.champion && snapshot.openDisputes === 0) snapshots.push(snapshot);
++    }
++    return snapshots;
++  } finally {
++    connection.release();
++  }
++}
+diff --git a/src/lib/tournament-engine.ts b/src/lib/tournament-engine.ts
+index c2e8f09..2f0c51d 100644
+--- a/src/lib/tournament-engine.ts
++++ b/src/lib/tournament-engine.ts
+@@ -963,6 +963,36 @@ export async function regenerateTournamentDraw(
+   }
+ }
+ 
++async function tournamentHasOpenDispute(connection: PoolConnection, tournamentId: number) {
++  const [rows] = await connection.query<RowDataPacket[]>(`
++    SELECT dispute.id
++    FROM match_disputes dispute
++    JOIN tournament_matches match_row ON match_row.id=dispute.match_id
++    WHERE match_row.tournament_id=? AND dispute.status IN ('open','accepted')
++    LIMIT 1
++  `, [tournamentId]);
++  return Boolean(rows[0]);
++}
++
++async function tournamentHasUnresolvedCancelledMatch(connection: PoolConnection, tournamentId: number) {
++  const [rows] = await connection.query<RowDataPacket[]>(`
++    SELECT match_row.id
++    FROM tournament_matches match_row
++    WHERE match_row.tournament_id=? AND match_row.status='CANCELLED'
++      AND match_row.winner_slot IS NULL
++      AND (SELECT COUNT(*) FROM match_participants participant WHERE participant.match_id=match_row.id)>=2
++    LIMIT 1
++  `, [tournamentId]);
++  return Boolean(rows[0]);
++}
++
++async function markTournamentCompleted(connection: PoolConnection, tournamentId: number) {
++  await connection.execute(`
++    UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?
++  `, [tournamentId]);
++  return { advanced: true, completed: true };
++}
++
+ export async function advanceTournament(connection: PoolConnection, tournamentId: number) {
+   const tournament = await loadTournament(connection, tournamentId);
+   if (!tournament || tournament.status === "COMPLETED") return { advanced: false };
+@@ -973,11 +1003,16 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+     LIMIT 1
+   `, [tournament.id]);
+   if (pending[0]) return { advanced: false };
++  if (await tournamentHasOpenDispute(connection, tournament.id)) {
++    return { advanced: false, blocked: "OPEN_DISPUTE" };
++  }
++  if (await tournamentHasUnresolvedCancelledMatch(connection, tournament.id)) {
++    return { advanced: false, blocked: "UNRESOLVED_CANCELLED_MATCH" };
++  }
+ 
+   const category = formatCategory(tournament.format);
+   if (category === "league") {
+-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+-    return { advanced: true, completed: true };
++    return markTournamentCompleted(connection, tournament.id);
+   }
+ 
+   if (category === "group") {
+@@ -1041,8 +1076,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+       await createSwissRound(connection, tournament, participants, currentRound + 1);
+       return { advanced: true, completed: false };
+     }
+-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+-    return { advanced: true, completed: true };
++    return markTournamentCompleted(connection, tournament.id);
+   }
+ 
+   if (category === "double") {
+@@ -1064,8 +1098,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+       ORDER BY state.losses,COALESCE(re.seed,999999),state.updated_at
+     `, [tournament.id]);
+     if (activeRows.length <= 1) {
+-      await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+-      return { advanced: true, completed: true };
++      return markTournamentCompleted(connection, tournament.id);
+     }
+ 
+     const participants = activeRows.map((row): Participant => ({
+@@ -1149,8 +1182,7 @@ export async function advanceTournament(connection: PoolConnection, tournamentId
+ 
+   const resolved = await resolveKnockoutRound(connection, lastRound.id);
+   if (resolved.winners.length <= 1) {
+-    await connection.execute(`UPDATE tournaments SET status='COMPLETED',updated_at=NOW() WHERE id=?`, [tournament.id]);
+-    return { advanced: true, completed: true };
++    return markTournamentCompleted(connection, tournament.id);
+   }
+ 
+   const nextRoundNumber = Number(lastRound.round_number) + 1;

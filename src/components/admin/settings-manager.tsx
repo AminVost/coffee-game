@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Save, ShieldCheck } from "lucide-react";
+import { Gauge, Save, ShieldCheck } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,6 +16,7 @@ type Settings = {
   auth: { admin2fa: "optional" | "required"; sessionDays: number };
   otp: { ttlMinutes: number; cooldownSeconds: number; hourlyLimit: number; ipHourlyLimit: number; maxAttempts: number };
   registration: { holdMinutes: number; correctionHours: number; waitlistOfferMinutes: number };
+  home: { tournamentsLimit: number; liveMatchesLimit: number };
   payment: { cash: boolean; pos: boolean; receipt: boolean; partial: boolean };
   notification: { inApp: boolean; email: boolean; sms: "disabled" | "optional" | "required" };
 };
@@ -60,6 +61,14 @@ export function SettingsManager() {
         </div>
       </Card>
       <Card className="p-6">
+        <h2 className="flex items-center gap-2 font-black"><Gauge className="text-[var(--brand)]" />نمایش صفحه اصلی</h2>
+        <p className="mt-2 text-xs leading-6 text-[var(--muted)]">تعداد کارت‌هایی که در صفحه اصلی نمایش داده می‌شوند. مقدار کمتر، صفحه سبک‌تر و سریع‌تر می‌سازد.</p>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <Label>تعداد مسابقات<Input type="number" min="1" max="12" value={settings.home.tournamentsLimit} onChange={(event) => setSettings({ ...settings, home: { ...settings.home, tournamentsLimit: Number(event.target.value) } })} /></Label>
+          <Label>تعداد نتایج زنده<Input type="number" min="1" max="12" value={settings.home.liveMatchesLimit} onChange={(event) => setSettings({ ...settings, home: { ...settings.home, liveMatchesLimit: Number(event.target.value) } })} /></Label>
+        </div>
+      </Card>
+      <Card className="p-6 lg:col-span-2">
         <h2 className="flex items-center gap-2 font-black"><ShieldCheck className="text-[var(--brand)]" />امنیت و سرویس‌ها</h2>
         <div className="mt-5 grid gap-4">
           <Label>ورود دومرحله‌ای مدیر<SelectField value={settings.auth.admin2fa} onValueChange={(value) => setSettings({ ...settings, auth: { ...settings.auth, admin2fa: value as Settings["auth"]["admin2fa"] } })} options={[{ value: "optional", label: "اختیاری" }, { value: "required", label: "اجباری" }]} /></Label>

@@ -6,18 +6,10 @@ import { LiveMatchCard } from "@/components/live-match-card";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Reveal } from "@/components/ui/reveal";
-import { listTournaments } from "@/lib/repositories/tournaments";
-import { listLiveMatches } from "@/lib/repositories/live";
-import { getPageContent } from "@/lib/repositories/content";
-
-export const dynamic = "force-dynamic";
+import { getHomePageData } from "@/lib/repositories/home";
 
 export default async function HomePage() {
-  const [tournaments, liveMatches, homeContent] = await Promise.all([
-    listTournaments(),
-    listLiveMatches(),
-    getPageContent("home")
-  ]);
+  const { tournaments, liveMatches, homeContent } = await getHomePageData();
   const featured = tournaments.find((item) => item.featured) || tournaments[0];
 
   return (
@@ -27,7 +19,7 @@ export default async function HomePage() {
         body={homeContent?.body || "سامانه رسمی مسابقات FC 26 و تخته‌نرد Coffee Game ستارخان؛ از ثبت‌نام تا قرعه، زمان‌بندی و نتیجه زنده."}
       />
 
-      <Reveal className="page-shell">
+      <Reveal className="home-deferred-section page-shell">
         <div className="mb-9 flex items-end justify-between gap-4">
           <div>
             <p className="section-kicker">UPCOMING TOURNAMENTS</p>
@@ -38,12 +30,16 @@ export default async function HomePage() {
             همه مسابقات <ArrowLeft size={17} />
           </Link>
         </div>
-        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-          {tournaments.slice(0, 3).map((item) => <TournamentCard key={item.id} tournament={item} />)}
-        </div>
+        {tournaments.length ? (
+          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {tournaments.map((item) => <TournamentCard key={item.id} tournament={item} />)}
+          </div>
+        ) : (
+          <Card className="p-6 text-center text-sm text-[var(--muted)]">در حال حاضر مسابقه‌ای برای نمایش وجود ندارد.</Card>
+        )}
       </Reveal>
 
-      <section className="border-y border-[var(--line)] bg-[var(--surface)]/70 backdrop-blur">
+      <section className="home-deferred-section border-y border-[var(--line)] bg-[var(--surface)]">
         <Reveal className="page-shell">
           <div className="mb-9 flex items-end justify-between gap-4">
             <div>
@@ -56,13 +52,17 @@ export default async function HomePage() {
               نمایشگر زنده
             </Button>
           </div>
-          <div className="grid gap-4 lg:grid-cols-2">
-            {liveMatches.slice(0, 4).map((match) => <LiveMatchCard key={match.id} match={match} />)}
-          </div>
+          {liveMatches.length ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              {liveMatches.map((match) => <LiveMatchCard key={match.id} match={match} />)}
+            </div>
+          ) : (
+            <Card className="p-6 text-center text-sm text-[var(--muted)]">فعلاً بازی زنده یا بازی آماده‌ای وجود ندارد.</Card>
+          )}
         </Reveal>
       </section>
 
-      <Reveal className="page-shell">
+      <Reveal className="home-deferred-section page-shell">
         <div className="grid gap-5 lg:grid-cols-3">
           {[
             {
@@ -94,8 +94,8 @@ export default async function HomePage() {
       </Reveal>
 
       {featured && (
-        <Reveal className="container-shell mb-20">
-          <section className="relative overflow-hidden rounded-[2.5rem] border border-[var(--line)] p-8 shadow-[var(--shadow-card)] sm:p-12" style={{ background: featured.cover }}>
+        <Reveal className="home-deferred-section container-shell mb-20">
+          <section className="relative overflow-hidden rounded-[2.5rem] border border-[var(--line)] p-8 sm:p-12" style={{ background: featured.cover }}>
             <div className="absolute inset-0 bg-gradient-to-l from-black/70 via-black/35 to-transparent" />
             <div className="relative max-w-2xl text-white">
               <span className="rounded-full border border-white/12 bg-black/25 px-4 py-2 text-xs font-black backdrop-blur">پیشنهاد ویژه</span>

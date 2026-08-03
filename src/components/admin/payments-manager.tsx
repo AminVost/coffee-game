@@ -31,6 +31,7 @@ type PaymentItem = {
   method: string;
   amount: number;
   status: string;
+  registrationStatus: string;
   cardLast4: string | null;
   trackingCode: string | null;
   paidOn: string | null;
@@ -59,6 +60,20 @@ const methodTitle: Record<string, string> = {
   cash: "نقدی حضوری",
   receipt: "انتقال بانکی قدیمی",
   online: "درگاه قدیمی"
+};
+
+const registrationStatusTitle: Record<string, string> = {
+  RESERVED: "رزرو موقت",
+  PENDING_PAYMENT: "در انتظار پرداخت حضوری",
+  PENDING_APPROVAL: "در انتظار بررسی پرداخت",
+  NEEDS_CORRECTION: "منتظر اصلاح کاربر",
+  CONFIRMED: "ثبت‌نام قطعی",
+  WAITLISTED: "صف انتظار",
+  CHECKED_IN: "حاضر در مسابقه",
+  NO_SHOW: "عدم حضور",
+  CANCELLED: "ثبت‌نام لغوشده",
+  REJECTED: "ثبت‌نام ردشده",
+  EXPIRED: "ثبت‌نام منقضی"
 };
 
 const methodOptions = [
@@ -279,8 +294,18 @@ export function PaymentsManager() {
 
       <div className="mt-5 grid gap-4">
         {filtered.map((item) => {
-          const canReview = item.status === "PENDING" || item.status === "NEEDS_CORRECTION";
           const needsCorrection = item.status === "NEEDS_CORRECTION";
+          const isCardTransferReady = item.status === "PENDING"
+            && item.method === "card_to_card"
+            && item.registrationStatus === "PENDING_APPROVAL"
+            && Boolean(item.submittedAt)
+            && Boolean(item.payerName && item.cardLast4 && item.trackingCode && item.paidOn);
+          const isOnsiteReady = item.status === "PENDING"
+            && ["pos", "cash"].includes(item.method)
+            && item.registrationStatus === "PENDING_PAYMENT";
+          const canApprove = isCardTransferReady || isOnsiteReady;
+          const canRequestCorrection = isCardTransferReady;
+          const canReject = canApprove || needsCorrection;
 
           return (
             <Card key={item.id} className="overflow-hidden">
@@ -316,6 +341,10 @@ export function PaymentsManager() {
                     dir="ltr"
                   />
                   <Info title="روش پرداخت" value={methodTitle[item.method] || item.method} />
+                  <Info
+                    title="وضعیت ثبت‌نام"
+                    value={registrationStatusTitle[item.registrationStatus] || item.registrationStatus}
+                  />
                 </div>
 
                 <div className="grid gap-3 rounded-2xl border border-[var(--line)] p-4 sm:grid-cols-2">
@@ -337,6 +366,18 @@ export function PaymentsManager() {
                   className="mx-5 mb-4"
                 >
                   {item.rejectedReason}
+                </Alert>
+              )}
+
+              {needsCorrection && (
+                <Alert tone="info" className="mx-5 mb-4">
+                  این پرداخت منتظر ارسال اطلاعات اصلاح‌شده توسط کاربر است و فعلاً قابل تأیید نیست.
+                </Alert>
+              )}
+
+              {item.status === "PENDING" && item.method === "card_to_card" && !isCardTransferReady && (
+                <Alert tone="warning" className="mx-5 mb-4">
+                  اطلاعات انتقال بانکی هنوز کامل ارسال نشده است.
                 </Alert>
               )}
 
@@ -380,40 +421,40 @@ export function PaymentsManager() {
                     مشاهده رسید
                   </Button>
                 )}
-                {canReview && (
-                  <>
-                    <Button
-                      type="button"
-                      size="sm"
-                      loading={busyId === item.id}
-                      onClick={() => update(item, "approve")}
-                    >
-                      <Check size={15} />
-                      تأیید پرداخت
-                    </Button>
-                    {item.method === "card_to_card" && !needsCorrection && (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        disabled={busyId === item.id}
-                        onClick={() => update(item, "request_correction")}
-                      >
-                        <MessageSquareWarning size={15} />
-                        نیازمند اصلاح
-                      </Button>
-                    )}
-                    <Button
-                      type="button"
-                      variant="dangerSoft"
-                      size="sm"
-                      disabled={busyId === item.id}
-                      onClick={() => update(item, "reject")}
-                    >
-                      <X size={15} />
-                      رد نهایی
-                    </Button>
-                  </>
+                {canApprove && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    loading={busyId === item.id}
+                    onClick={() => update(item, "approve")}
+                  >
+                    <Check size={15} />
+                    {isOnsiteReady ? "تأیید پرداخت حضوری" : "تأیید پرداخت"}
+                  </Button>
+                )}
+                {canRequestCorrection && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={busyId === item.id}
+                    onClick={() => update(item, "request_correction")}
+                  >
+                    <MessageSquareWarning size={15} />
+                    نیازمند اصلاح
+                  </Button>
+                )}
+                {canReject && (
+                  <Button
+                    type="button"
+                    variant="dangerSoft"
+                    size="sm"
+                    disabled={busyId === item.id}
+                    onClick={() => update(item, "reject")}
+                  >
+                    <X size={15} />
+                    رد نهایی
+                  </Button>
                 )}
               </div>
             </Card>
